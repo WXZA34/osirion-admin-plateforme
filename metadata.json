@@ -1,0 +1,6 @@
+{
+  "name": "Osirion Admin - Plateforme de Gestion & Analytique",
+  "description": "Portail web d'administration complet pour l'application mobile Osirion : graphiques temps réel, gestion des utilisateurs, clans, bastions H3, Dojo IA et Remote Config.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
