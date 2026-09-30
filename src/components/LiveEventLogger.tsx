@@ -167,11 +167,12 @@ export const LiveEventLogger: React.FC = () => {
 
   const filteredLogs = logs.filter((log) => {
     const matchesTag = selectedTag === 'ALL' || log.tag === selectedTag;
+    const q = (searchQuery || '').toLowerCase();
     const matchesSearch =
       searchQuery === '' ||
-      log.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      log.tag.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      JSON.stringify(log.payload).toLowerCase().includes(searchQuery.toLowerCase());
+      (log.message || '').toLowerCase().includes(q) ||
+      (log.tag || '').toLowerCase().includes(q) ||
+      (JSON.stringify(log.payload || '')).toLowerCase().includes(q);
 
     return matchesTag && matchesSearch;
   });

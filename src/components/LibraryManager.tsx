@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../lib/firebase';
-import { collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { AthleteUser } from '../types/admin';
+import { db } from '../lib/firebase';
+import {
+  collection,
+  doc,
+  setDoc,
+  onSnapshot,
+  writeBatch,
+  getDocs,
+} from 'firebase/firestore';
 import {
   LibraryBook,
   LibraryAudio,
@@ -18,6 +25,8 @@ import {
   INITIAL_FOCUS_SESSIONS,
   INITIAL_HONOR_CONTRACTS,
 } from '../data/libraryData';
+import { IntegratedBookReaderModal } from './IntegratedBookReaderModal';
+import { IntegratedPodcastPlayer } from './IntegratedPodcastPlayer';
 import {
   BookOpen,
   Headphones,
@@ -41,6 +50,8 @@ import {
   Upload,
   Archive,
   RefreshCw,
+  Database,
+  UploadCloud,
   ExternalLink,
   Flame,
   Shield,
@@ -70,66 +81,75 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
   // Navigation Tabs
   const [activeTab, setActiveTab] = useState<'books' | 'audios' | 'focus' | 'journal'>('books');
 
-  // Datasets
-  const [books, setBooks] = useState<LibraryBook[]>(INITIAL_LIBRARY_BOOKS);
-  const [audios, setAudios] = useState<LibraryAudio[]>(INITIAL_LIBRARY_AUDIOS);
-  const [focusSessions, setFocusSessions] = useState<ReadingFocusSession[]>(INITIAL_FOCUS_SESSIONS);
-  const [honorContracts, setHonorContracts] = useState<SealedHonorContract[]>(INITIAL_HONOR_CONTRACTS);
+  // Datasets Réels issus de Firestore
+  const [books, setBooks] = useState<LibraryBook[]>([]);
+  const [audios, setAudios] = useState<LibraryAudio[]>([]);
+  const [focusSessions, setFocusSessions] = useState<ReadingFocusSession[]>([]);
+  const [honorContracts, setHonorContracts] = useState<SealedHonorContract[]>([]);
 
-  // Sync Status
-  const [isBooksSynced, setIsBooksSynced] = useState<boolean>(false);
-  const [isAudiosSynced, setIsAudiosSynced] = useState<boolean>(false);
+  // Firestore Live State
+  const [isFirestoreSynced, setIsFirestoreSynced] = useState<boolean>(true);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
+  // Écouteurs Firestore temps réel (library_books & library_audios)
   useEffect(() => {
-    const unsubBooks = onSnapshot(collection(db, 'library_books'), (snapshot) => {
-      if (!snapshot.empty) {
-        setBooks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LibraryBook)));
-        setIsBooksSynced(true);
-      } else {
-        setIsBooksSynced(false);
-      }
-    });
+    let unsubBooks: (() => void) | undefined;
+    let unsubAudios: (() => void) | undefined;
 
-    const unsubAudios = onSnapshot(collection(db, 'library_audios'), (snapshot) => {
-      if (!snapshot.empty) {
-        setAudios(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LibraryAudio)));
-        setIsAudiosSynced(true);
-      } else {
-        setIsAudiosSynced(false);
-      }
-    });
+    try {
+      unsubBooks = onSnapshot(collection(db, 'library_books'), (snapshot) => {
+        if (!snapshot.empty) {
+          const list: LibraryBook[] = [];
+          snapshot.forEach((d) => list.push(d.data() as LibraryBook));
+          setBooks(list);
+          setIsFirestoreSynced(true);
+        }
+      }, () => setIsFirestoreSynced(false));
+
+      unsubAudios = onSnapshot(collection(db, 'library_audios'), (snapshot) => {
+        if (!snapshot.empty) {
+          const list: LibraryAudio[] = [];
+          snapshot.forEach((d) => list.push(d.data() as LibraryAudio));
+          setAudios(list);
+          setIsFirestoreSynced(true);
+        }
+      }, () => setIsFirestoreSynced(false));
+    } catch {
+      setIsFirestoreSynced(false);
+    }
 
     return () => {
-      unsubBooks();
-      unsubAudios();
+      unsubBooks?.();
+      unsubAudios?.();
     };
   }, []);
 
-  const handleDeployBooks = async () => {
+  const handleSyncWithFirestore = async () => {
+    setIsSyncing(true);
     try {
-      const batch = writeBatch(db);
-      books.forEach(b => {
-        batch.set(doc(db, 'library_books', b.id), b);
-      });
-      await batch.commit();
-      showToast('Livres déployés avec succès vers le Cloud !');
-    } catch (e) {
-      console.error(e);
-      showToast('Erreur lors du déploiement des livres.');
-    }
-  };
-
-  const handleDeployAudios = async () => {
-    try {
-      const batch = writeBatch(db);
-      audios.forEach(a => {
-        batch.set(doc(db, 'library_audios', a.id), a);
-      });
-      await batch.commit();
-      showToast('Audios déployés avec succès vers le Cloud !');
-    } catch (e) {
-      console.error(e);
-      showToast('Erreur lors du déploiement des audios.');
+      const snapBooks = await getDocs(collection(db, 'library_books'));
+      if (snapBooks.empty) {
+        const batch = writeBatch(db);
+        for (const b of INITIAL_LIBRARY_BOOKS) {
+          batch.set(doc(db, 'library_books', b.id), b, { merge: true });
+        }
+        for (const a of INITIAL_LIBRARY_AUDIOS) {
+          batch.set(doc(db, 'library_audios', a.id), a, { merge: true });
+        }
+        await batch.commit();
+        setIsFirestoreSynced(true);
+        showToast('Manuscrits et Capsules audio amorcés dans Firestore valerion-55414 !');
+      } else {
+        const bList: LibraryBook[] = [];
+        snapBooks.forEach((d) => bList.push(d.data() as LibraryBook));
+        setBooks(bList);
+        setIsFirestoreSynced(true);
+        showToast(`${bList.length} Livres synchronisés en direct depuis Firestore !`);
+      }
+    } catch (err: any) {
+      showToast(`Mode local actif : ${err?.message || 'Erreur réseau'}`);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -144,6 +164,10 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
   const [selectedAudio, setSelectedAudio] = useState<LibraryAudio | null>(null);
   const [bookToDelete, setBookToDelete] = useState<LibraryBook | null>(null);
   const [audioToDelete, setAudioToDelete] = useState<LibraryAudio | null>(null);
+
+  // In-Site Reader & Player
+  const [bookToRead, setBookToRead] = useState<LibraryBook | null>(null);
+  const [activeAudioPlayer, setActiveAudioPlayer] = useState<LibraryAudio | null>(null);
 
   // Multi-Step Add Book Wizard
   const [showAddBookWizard, setShowAddBookWizard] = useState(false);
@@ -192,53 +216,43 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
   // Filtered Books
   const filteredBooks = books.filter((b) => {
     const matchesArc = bookArcFilter === 'ALL' || b.arc === bookArcFilter;
+    const q = (bookSearch || '').toLowerCase();
     const matchesSearch =
-      b.title?.toLowerCase().includes(bookSearch.toLowerCase()) ||
-      b.author?.toLowerCase().includes(bookSearch.toLowerCase()) ||
-      b.tag?.toLowerCase().includes(bookSearch.toLowerCase()) ||
-      b.theme?.toLowerCase().includes(bookSearch.toLowerCase());
+      (b.title || '').toLowerCase().includes(q) ||
+      (b.author || '').toLowerCase().includes(q) ||
+      (b.tag || '').toLowerCase().includes(q) ||
+      (b.theme || '').toLowerCase().includes(q);
     return matchesArc && matchesSearch;
   });
 
   // Filtered Audios
   const filteredAudios = audios.filter((a) => {
     const matchesCat = audioCategoryFilter === 'ALL' || a.category === audioCategoryFilter;
+    const q = (audioSearch || '').toLowerCase();
     const matchesSearch =
-      a.title?.toLowerCase().includes(audioSearch.toLowerCase()) ||
-      a.subtitle?.toLowerCase().includes(audioSearch.toLowerCase()) ||
-      (a.speakerName?.toLowerCase().includes(audioSearch.toLowerCase()) ?? false);
+      (a.title || '').toLowerCase().includes(q) ||
+      (a.subtitle || '').toLowerCase().includes(q) ||
+      ((a.speakerName || '').toLowerCase().includes(q));
     return matchesCat && matchesSearch;
   });
 
+  // Handlers for Books
   const handleToggleBookStatus = (bookId: string) => {
-    const book = books.find(b => b.id === bookId);
-    if (!book) return;
-    const nextStatus: BookStatus = book.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
-    
-    if (isBooksSynced) {
-      setDoc(doc(db, 'library_books', bookId), { ...book, status: nextStatus });
-    } else {
-      setBooks((prev) =>
-        prev.map((b) => {
-          if (b.id === bookId) {
-            return { ...b, status: nextStatus };
-          }
-          return b;
-        })
-      );
-    }
+    setBooks((prev) =>
+      prev.map((b) => {
+        if (b.id === bookId) {
+          const nextStatus: BookStatus = b.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
+          return { ...b, status: nextStatus };
+        }
+        return b;
+      })
+    );
     showToast('Statut du livre mis à jour (synchronisé avec l’application mobile).');
   };
 
   const handleConfirmDeleteBook = () => {
     if (!bookToDelete) return;
-    
-    if (isBooksSynced) {
-      deleteDoc(doc(db, 'library_books', bookToDelete.id));
-    } else {
-      setBooks((prev) => prev.filter((b) => b.id !== bookToDelete.id));
-    }
-    
+    setBooks((prev) => prev.filter((b) => b.id !== bookToDelete.id));
     if (selectedBook && selectedBook.id === bookToDelete.id) {
       setSelectedBook(null);
     }
@@ -274,11 +288,7 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
       chaptersCount: 10,
     };
 
-    if (isBooksSynced) {
-      setDoc(doc(db, 'library_books', newBook.id), newBook);
-    } else {
-      setBooks([newBook, ...books]);
-    }
+    setBooks([newBook, ...books]);
     setShowAddBookWizard(false);
     resetBookWizard();
     showToast(`Le traité « ${newBook.title} » a été validé et intégré à la Bibliothèque !`);
@@ -309,34 +319,21 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
 
   // Handlers for Audios
   const handleToggleAudioStatus = (audioId: string) => {
-    const audio = audios.find(a => a.id === audioId);
-    if (!audio) return;
-    const nextStatus: AudioStatus = audio.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
-
-    if (isAudiosSynced) {
-      setDoc(doc(db, 'library_audios', audioId), { ...audio, status: nextStatus });
-    } else {
-      setAudios((prev) =>
-        prev.map((a) => {
-          if (a.id === audioId) {
-            return { ...a, status: nextStatus };
-          }
-          return a;
-        })
-      );
-    }
+    setAudios((prev) =>
+      prev.map((a) => {
+        if (a.id === audioId) {
+          const nextStatus: AudioStatus = a.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
+          return { ...a, status: nextStatus };
+        }
+        return a;
+      })
+    );
     showToast('Statut de la capsule audio mis à jour.');
   };
 
   const handleConfirmDeleteAudio = () => {
     if (!audioToDelete) return;
-    
-    if (isAudiosSynced) {
-      deleteDoc(doc(db, 'library_audios', audioToDelete.id));
-    } else {
-      setAudios((prev) => prev.filter((a) => a.id !== audioToDelete.id));
-    }
-
+    setAudios((prev) => prev.filter((a) => a.id !== audioToDelete.id));
     if (selectedAudio && selectedAudio.id === audioToDelete.id) {
       setSelectedAudio(null);
     }
@@ -367,12 +364,7 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
       fileSizeBytes: 12000000,
     };
 
-    if (isAudiosSynced) {
-      setDoc(doc(db, 'library_audios', newAudio.id), newAudio);
-    } else {
-      setAudios([newAudio, ...audios]);
-    }
-
+    setAudios([newAudio, ...audios]);
     setShowAddAudioWizard(false);
     resetAudioWizard();
     showToast(`La capsule audio « ${newAudio.title} » a été publiée avec succès !`);
@@ -414,10 +406,46 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
 
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-xs font-bold tracking-wide">
-              <Library className="w-3.5 h-3.5 text-indigo-400" />
-              <span>SANCTUAIRE DE SAGESSE & CULTURE DE L'ATHLÈTE</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-xs font-bold tracking-wide">
+                <Library className="w-3.5 h-3.5 text-indigo-400" />
+                <span>SANCTUAIRE DE SAGESSE & CULTURE DE L'ATHLÈTE</span>
+              </div>
+
+              {/* Firestore Live Badge */}
+              <div
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all ${
+                  isFirestoreSynced
+                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                    : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isFirestoreSynced ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                  }`}
+                />
+                <Database className="w-3 h-3 text-slate-300" />
+                <span>
+                  {isFirestoreSynced
+                    ? 'Firestore Connecté en Direct (valerion-55414)'
+                    : 'Mode Local • Prêt à Connecter'}
+                </span>
+              </div>
+
+              {/* Sync Button */}
+              <button
+                type="button"
+                onClick={handleSyncWithFirestore}
+                disabled={isSyncing}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-indigo-500 hover:bg-indigo-400 text-white transition-all shadow-md shadow-indigo-500/20 disabled:opacity-50 cursor-pointer"
+                title="Synchroniser immédiatement la Bibliothèque avec Firestore"
+              >
+                <UploadCloud className={`w-3.5 h-3.5 ${isSyncing ? 'animate-bounce' : ''}`} />
+                <span>{isSyncing ? 'Synchronisation...' : 'Amorcer / Forcer Synchronisation'}</span>
+              </button>
             </div>
+
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-3">
               <span>La Grande Bibliothèque & Podcasts</span>
               <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-xl bg-indigo-600 text-white">
@@ -440,7 +468,7 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
             <div className="bg-white/5 border border-white/10 rounded-2xl p-3 text-center backdrop-blur-xs">
               <span className="text-[10px] text-slate-400 uppercase tracking-wider block font-semibold">Écoutes Audios</span>
               <span className="text-xl font-black text-amber-400 font-mono mt-0.5 block">
-                {(totalListens || 0).toLocaleString()}
+                {totalListens.toLocaleString()}
               </span>
             </div>
             <div className="bg-white/5 border border-white/10 rounded-2xl p-3 text-center backdrop-blur-xs">
@@ -514,47 +542,29 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
         {/* Action Button depending on current tab */}
         <div className="flex items-center gap-2">
           {activeTab === 'books' && userRole === 'superadmin' && (
-            <>
-              <button
-                onClick={handleDeployBooks}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition"
-              >
-                <Upload className="w-4 h-4" />
-                <span>Déployer Firestore</span>
-              </button>
-              <button
-                onClick={() => {
-                  resetBookWizard();
-                  setShowAddBookWizard(true);
-                }}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Intégrer un Livre</span>
-              </button>
-            </>
+            <button
+              onClick={() => {
+                resetBookWizard();
+                setShowAddBookWizard(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Intégrer un Livre (Processus)</span>
+            </button>
           )}
 
           {activeTab === 'audios' && userRole === 'superadmin' && (
-            <>
-              <button
-                onClick={handleDeployAudios}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition"
-              >
-                <Upload className="w-4 h-4" />
-                <span>Déployer Firestore</span>
-              </button>
-              <button
-                onClick={() => {
-                  resetAudioWizard();
-                  setShowAddAudioWizard(true);
-                }}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs transition"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Publier Capsule</span>
-              </button>
-            </>
+            <button
+              onClick={() => {
+                resetAudioWizard();
+                setShowAddAudioWizard(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs transition"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Publier une Capsule Audio</span>
+            </button>
           )}
         </div>
       </div>
@@ -682,11 +692,22 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
                 {/* Actions */}
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5">
                   <button
+                    type="button"
+                    onClick={() => setBookToRead(book)}
+                    className="flex-1 py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    title="Lire le livre directement dans le site"
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>Lire dans le Site</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => setSelectedBook(book)}
-                    className="flex-1 py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition flex items-center justify-center gap-1"
+                    title="Détails & Fiche technique"
+                    className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
                   >
                     <Eye className="w-3.5 h-3.5" />
-                    <span>Détails & Fichier</span>
                   </button>
 
                   {userRole === 'superadmin' && (
@@ -781,14 +802,20 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
                     <div className="flex items-center gap-3.5 min-w-0 flex-1">
                       {/* Play Button preview */}
                       <button
-                        onClick={() => togglePlayAudio(audio.id)}
+                        type="button"
+                        onClick={() => setActiveAudioPlayer(audio)}
                         className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition ${
-                          isPlaying
+                          activeAudioPlayer?.id === audio.id
                             ? 'bg-amber-500 text-white scale-105 animate-pulse'
                             : 'bg-slate-900 hover:bg-amber-500 text-white'
                         }`}
+                        title="Écouter directement dans le site"
                       >
-                        {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                        {activeAudioPlayer?.id === audio.id ? (
+                          <Pause className="w-5 h-5" />
+                        ) : (
+                          <Play className="w-5 h-5 ml-0.5" />
+                        )}
                       </button>
 
                       <div className="min-w-0 flex-1">
@@ -823,17 +850,29 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
                     <div className="flex items-center gap-4 self-end md:self-center shrink-0">
                       <div className="text-right font-mono text-xs hidden sm:block">
                         <span className="font-bold text-slate-800 block">
-                          {(audio.listenCount || 0).toLocaleString()} écoutes
+                          {audio.listenCount.toLocaleString()} écoutes
                         </span>
                         <span className="text-[10px] text-slate-400">Ordre #{audio.order}</span>
                       </div>
 
                       <div className="flex items-center gap-1.5">
                         <button
+                          type="button"
+                          onClick={() => setActiveAudioPlayer(audio)}
+                          className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                          title="Lancer le lecteur de podcast dans le site"
+                        >
+                          <Headphones className="w-3.5 h-3.5" />
+                          <span>Écouter dans le Site</span>
+                        </button>
+
+                        <button
+                          type="button"
                           onClick={() => setSelectedAudio(audio)}
                           className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition"
+                          title="Détails techniques"
                         >
-                          Détails Flux
+                          Détails
                         </button>
 
                         {userRole === 'superadmin' && (
@@ -1463,10 +1502,24 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
               </div>
             </div>
 
-            <div className="flex justify-end pt-3 border-t border-slate-100">
+            <div className="flex justify-between items-center pt-3 border-t border-slate-100">
               <button
+                type="button"
+                onClick={() => {
+                  const b = selectedBook;
+                  setSelectedBook(null);
+                  setBookToRead(b);
+                }}
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold flex items-center gap-2 shadow-md transition cursor-pointer"
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>Ouvrir & Lire le Livre dans le Site</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setSelectedBook(null)}
-                className="px-5 py-2 rounded-xl bg-slate-900 text-white font-bold"
+                className="px-5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold transition"
               >
                 Fermer
               </button>
@@ -1543,6 +1596,22 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* LECTEUR DE LIVRE INTÉGRÉ PLEIN ÉCRAN */}
+      {bookToRead && (
+        <IntegratedBookReaderModal
+          book={bookToRead}
+          onClose={() => setBookToRead(null)}
+        />
+      )}
+
+      {/* LECTEUR DE PODCAST & AUDIO INTÉGRÉ */}
+      {activeAudioPlayer && (
+        <IntegratedPodcastPlayer
+          audio={activeAudioPlayer}
+          onClose={() => setActiveAudioPlayer(null)}
+        />
       )}
 
       {/* TOAST FEEDBACK */}

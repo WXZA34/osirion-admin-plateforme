@@ -502,10 +502,11 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
                 .filter((r) => {
                   const matchStatus = reportStatusFilter === 'ALL' || r.status === reportStatusFilter;
                   const matchSeverity = reportSeverityFilter === 'ALL' || r.severity === reportSeverityFilter;
+                  const q = (reportSearchQuery || '').toLowerCase();
                   const matchSearch =
-                    r.reportedUsername.toLowerCase().includes(reportSearchQuery.toLowerCase()) ||
-                    r.reporterUsername.toLowerCase().includes(reportSearchQuery.toLowerCase()) ||
-                    r.description.toLowerCase().includes(reportSearchQuery.toLowerCase());
+                    (r.reportedUsername || '').toLowerCase().includes(q) ||
+                    (r.reporterUsername || '').toLowerCase().includes(q) ||
+                    (r.description || '').toLowerCase().includes(q);
                   return matchStatus && matchSeverity && matchSearch;
                 })
                 .map((report) => (

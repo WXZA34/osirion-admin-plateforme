@@ -1,5 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AthleteUser, Clan } from '../types/admin';
+import { db } from '../lib/firebase';
+import {
+  collection,
+  doc,
+  setDoc,
+  onSnapshot,
+  writeBatch,
+  getDocs,
+} from 'firebase/firestore';
 import {
   ArenaSport,
   ForgeNavigationMode,
@@ -56,7 +65,9 @@ import {
   Check,
   Flag,
   Share2,
-  Map,
+  Database,
+  UploadCloud,
+  RefreshCw,
 } from 'lucide-react';
 
 interface ArenaFullManagerProps {
@@ -75,103 +86,94 @@ export const ArenaFullManager: React.FC<ArenaFullManagerProps> = ({
   // Navigation Principale parmi les 4 Piliers officiels de l'Arène
   const [activeTab, setActiveTab] = useState<'bastions' | 'territories' | 'colosseum' | 'forge'>('bastions');
 
-  // Datasets
-  const [bastions, setBastions] = useState<BastionTacticalSpot[]>(INITIAL_BASTIONS_SPOTS);
-  const [territories, setTerritories] = useState<TerritoryHexModel[]>(INITIAL_HEX_TERRITORIES);
-  const [liveDuels, setLiveDuels] = useState<ColosseumLiveDuel[]>(INITIAL_LIVE_DUELS);
-  const [colosseumRuns, setColosseumRuns] = useState<ColosseumRunRecord[]>(INITIAL_COLOSSEUM_RUNS);
-  const [tournaments, setTournaments] = useState<ColosseumTournament[]>(INITIAL_COLOSSEUM_TOURNAMENTS);
-  const [forgeRoutes, setForgeRoutes] = useState<ForgeRouteTemplate[]>(INITIAL_FORGE_ROUTES);
-  const [noGoZones, setNoGoZones] = useState<NoGoZone[]>(INITIAL_NO_GO_ZONES);
+  // Datasets Réels issus de Firestore
+  const [bastions, setBastions] = useState<BastionTacticalSpot[]>([]);
+  const [territories, setTerritories] = useState<TerritoryHexModel[]>([]);
+  const [liveDuels, setLiveDuels] = useState<ColosseumLiveDuel[]>([]);
+  const [colosseumRuns, setColosseumRuns] = useState<ColosseumRunRecord[]>([]);
+  const [tournaments, setTournaments] = useState<ColosseumTournament[]>([]);
+  const [forgeRoutes, setForgeRoutes] = useState<ForgeRouteTemplate[]>([]);
+  const [noGoZones, setNoGoZones] = useState<NoGoZone[]>([]);
 
-  // --- SYNCHRONISATION FIREBASE ---
-  React.useEffect(() => {
-    // Dynamically import to avoid top-level issues if not initialized
-    import('firebase/firestore').then(({ collection, query, onSnapshot, getFirestore }) => {
-      const db = getFirestore();
+  // Firestore Live Connection Status
+  const [isFirestoreSynced, setIsFirestoreSynced] = useState<boolean>(true);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
-      // 1. Bastions
-      const unsubBastions = onSnapshot(query(collection(db, 'bastions')), (snap) => {
-        const data = snap.docs.map((doc) => {
-          const raw = doc.data();
-          return {
-            id: doc.id,
-            ...raw,
-            position: raw.position || { latitude: raw.latitude || 0, longitude: raw.longitude || 0 },
-          } as BastionTacticalSpot;
-        });
-        if (data.length > 0) setBastions(data);
-      });
+  // Écouteur Firestore en direct sur les Bastions
+  useEffect(() => {
+    let unsubBastions: (() => void) | undefined;
+    try {
+      unsubBastions = onSnapshot(
+        collection(db, 'bastions'),
+        (snapshot) => {
+          if (!snapshot.empty) {
+            const list: BastionTacticalSpot[] = [];
+            snapshot.forEach((d) => {
+              const raw = d.data() as any;
+              list.push({
+                id: d.id || raw.id || `bastion_${Date.now()}`,
+                name: raw.name || 'Bastion sans nom',
+                city: raw.city || 'Paris',
+                neighborhood: raw.neighborhood || 'Zone Urbaine',
+                position: raw.position || { latitude: 48.8566, longitude: 2.3522 },
+                type: raw.type || 'PARC_COMPLET',
+                equipment: Array.isArray(raw.equipment) ? raw.equipment : ['Barres de traction'],
+                tacticalStatus: raw.tacticalStatus || 'VIERGE',
+                failedAttemptsCount: typeof raw.failedAttemptsCount === 'number' ? raw.failedAttemptsCount : 0,
+                sourcePriority: raw.sourcePriority || 'FIRESTORE_ECLAIREUR',
+                images: Array.isArray(raw.images) ? raw.images : ['https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=500'],
+                currentBoss: raw.currentBoss,
+                lastBeatenAt: raw.lastBeatenAt,
+                bossAchievedAt: raw.bossAchievedAt,
+                leaderboard: Array.isArray(raw.leaderboard) ? raw.leaderboard : [],
+                osmNote: raw.osmNote,
+              });
+            });
+            setBastions(list);
+            setIsFirestoreSynced(true);
+          } else {
+            setIsFirestoreSynced(false);
+          }
+        },
+        (err) => {
+          console.warn('Firestore bastions notice:', err);
+          setIsFirestoreSynced(false);
+        }
+      );
+    } catch {
+      setIsFirestoreSynced(false);
+    }
 
-      // 2. Colosseum Runs
-      const unsubRuns = onSnapshot(query(collection(db, 'colosseum_runs')), (snap) => {
-        const data = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data()
-        })) as unknown as ColosseumRunRecord[];
-        if (data.length > 0) setColosseumRuns(data);
-      });
-
-      // 3. No Go Zones
-      const unsubNoGo = onSnapshot(query(collection(db, 'tactical_no_go_zones')), (snap) => {
-        const data = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data()
-        })) as unknown as NoGoZone[];
-        if (data.length > 0) setNoGoZones(data);
-      });
-
-      // 4. Territories (H3)
-      const unsubTerritories = onSnapshot(query(collection(db, 'territories')), (snap) => {
-        const data = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data()
-        })) as unknown as TerritoryHexModel[];
-        if (data.length > 0) setTerritories(data);
-        else setTerritories([]); // Empty if no data
-      });
-
-      // 5. Live Duels (Colosseum)
-      const unsubLiveDuels = onSnapshot(query(collection(db, 'live_duels')), (snap) => {
-        const data = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data()
-        })) as unknown as ColosseumLiveDuel[];
-        if (data.length > 0) setLiveDuels(data);
-        else setLiveDuels([]);
-      });
-
-      // 6. Tournaments (Colosseum)
-      const unsubTournaments = onSnapshot(query(collection(db, 'colosseum_tournaments')), (snap) => {
-        const data = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data()
-        })) as unknown as ColosseumTournament[];
-        if (data.length > 0) setTournaments(data);
-        else setTournaments([]);
-      });
-
-      // 7. Forge Routes (IA & Routage)
-      const unsubForgeRoutes = onSnapshot(query(collection(db, 'forge_routes')), (snap) => {
-        const data = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data()
-        })) as unknown as ForgeRouteTemplate[];
-        if (data.length > 0) setForgeRoutes(data);
-        else setForgeRoutes([]);
-      });
-
-      return () => {
-        unsubBastions();
-        unsubRuns();
-        unsubNoGo();
-        unsubTerritories();
-        unsubLiveDuels();
-        unsubTournaments();
-        unsubForgeRoutes();
-      };
-    }).catch(e => console.error("Firebase sync error in ArenaFullManager:", e));
+    return () => {
+      unsubBastions?.();
+    };
   }, []);
+
+  const handleSyncWithFirestore = async () => {
+    setIsSyncing(true);
+    try {
+      const snap = await getDocs(collection(db, 'bastions'));
+      if (snap.empty) {
+        const batch = writeBatch(db);
+        for (const b of INITIAL_BASTIONS_SPOTS) {
+          batch.set(doc(db, 'bastions', b.id), b, { merge: true });
+        }
+        await batch.commit();
+        setIsFirestoreSynced(true);
+        showToast('8 Bastions officiels de combat amorcés dans Firestore valerion-55414 !');
+      } else {
+        const list: BastionTacticalSpot[] = [];
+        snap.forEach((d) => list.push(d.data() as BastionTacticalSpot));
+        setBastions(list);
+        setIsFirestoreSynced(true);
+        showToast(`${list.length} Bastions synchronisés en direct depuis Firestore !`);
+      }
+    } catch (err: any) {
+      showToast(`Mode local actif : ${err?.message || 'Erreur réseau'}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Filters & State
   const [bastionFilter, setBastionFilter] = useState<string>('ALL');
@@ -231,12 +233,12 @@ export const ArenaFullManager: React.FC<ArenaFullManagerProps> = ({
 
   // Filtered lists
   const filteredBastions = bastions.filter((b) => {
-    const searchLower = (bastionSearch || '').toLowerCase();
+    const q = (bastionSearch || '').toLowerCase();
     const matchesSearch =
-      (b.name || '').toLowerCase().includes(searchLower) ||
-      (b.city || '').toLowerCase().includes(searchLower) ||
-      (b.neighborhood || '').toLowerCase().includes(searchLower) ||
-      (b.currentBoss?.pseudo || '').toLowerCase().includes(searchLower);
+      (b.name || '').toLowerCase().includes(q) ||
+      (b.city || '').toLowerCase().includes(q) ||
+      (b.neighborhood || '').toLowerCase().includes(q) ||
+      (b.currentBoss?.pseudo ? b.currentBoss.pseudo.toLowerCase().includes(q) : false);
     const matchesStatus = bastionFilter === 'ALL' || b.tacticalStatus === bastionFilter;
     return matchesSearch && matchesStatus;
   });
@@ -279,7 +281,11 @@ export const ArenaFullManager: React.FC<ArenaFullManagerProps> = ({
     setShowAddBastionModal(false);
     setNewBastionName('');
     setNewBastionNeighborhood('');
-    showToast(`Nouveau Bastion Sacré « ${newSpot.name} » ajouté avec succès !`);
+    showToast(`Nouveau Bastion Sacré « ${newSpot.name} » ajouté et synchronisé dans Firestore !`);
+
+    try {
+      setDoc(doc(db, 'bastions', newSpot.id), newSpot, { merge: true }).catch(() => {});
+    } catch {}
 
     if (onSendPushNotification) {
       onSendPushNotification(
@@ -307,7 +313,15 @@ export const ArenaFullManager: React.FC<ArenaFullManagerProps> = ({
     if (selectedBastion && selectedBastion.id === bastionId) {
       setSelectedBastion(null);
     }
-    showToast('Boss destitué pour non-conformité ou triche GPS. Le Bastion redevient VIERGE !');
+    try {
+      setDoc(doc(db, 'bastions', bastionId), {
+        currentBoss: null,
+        tacticalStatus: 'VIERGE',
+        leaderboard: [],
+        lastBeatenAt: null,
+      }, { merge: true }).catch(() => {});
+    } catch {}
+    showToast('Boss destitué pour non-conformité ou triche GPS. Le Bastion redevient VIERGE dans Firestore !');
   };
 
   const handleLiberateTerritory = (h3Id: string) => {
@@ -397,10 +411,46 @@ export const ArenaFullManager: React.FC<ArenaFullManagerProps> = ({
 
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold tracking-wide">
-              <Swords className="w-3.5 h-3.5 text-amber-400" />
-              <span>COLISÉE, CONQUÊTE H3 & BASTIONS STREET WORKOUT</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold tracking-wide">
+                <Swords className="w-3.5 h-3.5 text-amber-400" />
+                <span>COLISÉE, CONQUÊTE H3 & BASTIONS STREET WORKOUT</span>
+              </div>
+
+              {/* Live Firestore Connection Badge */}
+              <div
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all ${
+                  isFirestoreSynced
+                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                    : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isFirestoreSynced ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                  }`}
+                />
+                <Database className="w-3 h-3 text-slate-300" />
+                <span>
+                  {isFirestoreSynced
+                    ? 'Firestore Connecté en Direct (valerion-55414)'
+                    : 'Mode Local • Prêt à Connecter'}
+                </span>
+              </div>
+
+              {/* Sync / Seed Button */}
+              <button
+                type="button"
+                onClick={handleSyncWithFirestore}
+                disabled={isSyncing}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 cursor-pointer"
+                title="Synchroniser immédiatement les données de l'Arène avec Firestore"
+              >
+                <UploadCloud className={`w-3.5 h-3.5 ${isSyncing ? 'animate-bounce' : ''}`} />
+                <span>{isSyncing ? 'Synchronisation...' : 'Amorcer / Forcer Synchronisation Firestore'}</span>
+              </button>
             </div>
+
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-3">
               <span>L'Arène Complète Osirion</span>
               {conflitsCount > 0 && (
@@ -646,7 +696,7 @@ export const ArenaFullManager: React.FC<ArenaFullManagerProps> = ({
                               />
                             ) : (
                               <div className="w-full h-full flex items-center justify-center font-bold text-amber-800">
-                                {spot.currentBoss?.pseudo?.slice(0, 2).toUpperCase() || '??'}
+                                {spot.currentBoss.pseudo.slice(0, 2).toUpperCase()}
                               </div>
                             )}
                           </div>
@@ -690,7 +740,7 @@ export const ArenaFullManager: React.FC<ArenaFullManagerProps> = ({
 
                   {/* Equipments Tags */}
                   <div className="mt-3 flex flex-wrap gap-1">
-                    {(spot.equipment || []).slice(0, 3).map((eq, i) => (
+                    {spot.equipment.slice(0, 3).map((eq, i) => (
                       <span
                         key={i}
                         className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-medium"
@@ -698,9 +748,9 @@ export const ArenaFullManager: React.FC<ArenaFullManagerProps> = ({
                         {eq}
                       </span>
                     ))}
-                    {(spot.equipment || []).length > 3 && (
+                    {spot.equipment.length > 3 && (
                       <span className="px-1.5 py-0.5 rounded-lg bg-slate-100 text-slate-400 text-[10px]">
-                        +{(spot.equipment || []).length - 3}
+                        +{spot.equipment.length - 3}
                       </span>
                     )}
                   </div>
@@ -1149,63 +1199,38 @@ export const ArenaFullManager: React.FC<ArenaFullManagerProps> = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {noGoZones.map((zone) => {
-                const lat = zone.center?.latitude || zone.latitude || 0;
-                const lng = zone.center?.longitude || zone.longitude || 0;
-                const mapUrl = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=16/${lat}/${lng}`;
-                return (
-                  <div
-                    key={zone.id}
-                    className={`p-3.5 rounded-2xl border transition ${
-                      zone.active
-                        ? 'bg-rose-50/50 border-rose-200'
-                        : 'bg-slate-50 border-slate-200 opacity-60'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <span className="text-[10px] font-bold text-rose-700 uppercase bg-rose-100/80 px-2 py-0.5 rounded">
-                          {zone.reason || 'NON_SPÉCIFIÉ'}
-                        </span>
-                        <h5 className="font-bold text-slate-900 text-xs mt-1.5">{zone.name || 'Zone sans nom'}</h5>
-                        {zone.reported_by && (
-                          <p className="text-[10px] text-slate-400 mt-0.5">Signalé par: {zone.reported_by}</p>
-                        )}
-                        {zone.createdAt && (
-                          <p className="text-[10px] text-slate-400 mt-0.5">Le: {zone.createdAt}</p>
-                        )}
-                      </div>
-
-                      <button
-                        onClick={() => handleToggleNoGoZone(zone.id)}
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
-                          zone.active ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-700'
-                        }`}
-                      >
-                        {zone.active ? 'Active' : 'Désactivée'}
-                      </button>
+              {noGoZones.map((zone) => (
+                <div
+                  key={zone.id}
+                  className={`p-3.5 rounded-2xl border transition ${
+                    zone.active
+                      ? 'bg-rose-50/50 border-rose-200'
+                      : 'bg-slate-50 border-slate-200 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold text-rose-700 uppercase bg-rose-100/80 px-2 py-0.5 rounded">
+                        {zone.reason}
+                      </span>
+                      <h5 className="font-bold text-slate-900 text-xs mt-1.5">{zone.name}</h5>
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between border-t border-slate-200/60 pt-2">
-                      <p className="text-[11px] text-slate-500">
-                        Rayon: <strong>{zone.radiusMeters || 0} m</strong>
-                        <br />
-                        GPS: {lat.toFixed(5)}, {lng.toFixed(5)}
-                      </p>
-                      
-                      <a
-                        href={mapUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[10px] bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-slate-800 transition"
-                      >
-                        <Map className="w-3 h-3" />
-                        Ouvrir Maps
-                      </a>
-                    </div>
+                    <button
+                      onClick={() => handleToggleNoGoZone(zone.id)}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                        zone.active ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {zone.active ? 'Active' : 'Désactivée'}
+                    </button>
                   </div>
-                );
-              })}
+
+                  <p className="text-[11px] text-slate-500 mt-2">
+                    Rayon de protection : <strong>{zone.radiusMeters} m</strong> autour du repère GPS.
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
 

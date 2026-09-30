@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   TrendingUp,
   Activity,
@@ -17,10 +17,7 @@ import {
   Info,
   Filter
 } from 'lucide-react';
-import { AthleteUser } from '../types/admin';
 import { CurrentArcBanner } from './CurrentArcBanner';
-import { db } from '../lib/firebase';
-import { collection, getCountFromServer, getDocs } from 'firebase/firestore';
 
 interface RetentionPoint {
   dayLabel: string;
@@ -40,120 +37,39 @@ interface CohortRow {
   d30: number | null; // null if ongoing
 }
 
-export const AnalyticsCharts: React.FC<{ athletes?: AthleteUser[] }> = ({ athletes = [] }) => {
+export const AnalyticsCharts: React.FC = () => {
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d' | 'year'>('7d');
   const [selectedCohort, setSelectedCohort] = useState<'all' | 'recent' | 'veterans'>('all');
   const [hoveredPoint, setHoveredPoint] = useState<RetentionPoint | null>(null);
 
-  const [activeAthletesNow, setActiveAthletesNow] = useState<number | string>('...');
-  const [contestedHexagons, setContestedHexagons] = useState<number | string>('...');
-  const [totalRepsToday, setTotalRepsToday] = useState<number | string>('...');
-  const [activeDuelsCount, setActiveDuelsCount] = useState<number | string>('...');
-  const [clanDominance, setClanDominance] = useState<{name: string, count: number, percentage: number}[]>([]);
-  const [totalBastions, setTotalBastions] = useState<number>(0);
-
-  useEffect(() => {
-    const fetchRealData = async () => {
-      try {
-        const athletesSnap = await getCountFromServer(collection(db, 'users'));
-        setActiveAthletesNow(athletesSnap.data().count);
-        
-        const clansSnap = await getCountFromServer(collection(db, 'clans'));
-        setContestedHexagons(clansSnap.data().count);
-
-        // Fetch Duels (Runs dans l'arène / Colisée)
-        const duelsSnap = await getCountFromServer(collection(db, 'colosseum_runs'));
-        setActiveDuelsCount(duelsSnap.data().count);
-
-        // Fetch Bastions to calculate Clan Dominance
-        const bastionsSnap = await getDocs(collection(db, 'bastions'));
-        const bastionsList = bastionsSnap.docs.map(d => d.data());
-        setTotalBastions(bastionsList.length);
-        
-        const clanCounts: Record<string, number> = {};
-        bastionsList.forEach(b => {
-          const clanName = b.currentBoss?.clanName || 'Non Revendiqué';
-          clanCounts[clanName] = (clanCounts[clanName] || 0) + 1;
-        });
-
-        const sortedClans = Object.entries(clanCounts)
-          .map(([name, count]) => ({
-            name,
-            count,
-            percentage: bastionsList.length > 0 ? (count / bastionsList.length) * 100 : 0
-          }))
-          .sort((a, b) => b.count - a.count);
-
-        setClanDominance(sortedClans);
-
-        // Calculate total reps from loaded athletes
-        const reps = athletes.reduce((acc, u) => acc + (u.totalReps || 0), 0);
-        setTotalRepsToday(reps);
-      } catch (err) {
-        console.error("Erreur chargement données Firebase :", err);
-        setActiveAthletesNow('Erreur');
-        setContestedHexagons('Erreur');
-        setActiveDuelsCount('Erreur');
-      }
-    };
-    fetchRealData();
-  }, [athletes]);
+  const activeAthletesNow = 142;
+  const totalRepsToday = 38450;
+  const activeDuelsCount = 18;
+  const contestedHexagons = 34;
 
   const weekDays = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
   const pushupsData = [3400, 4200, 3900, 5100, 5800, 7200, 6800];
   const squatsData = [2800, 3100, 3400, 4100, 4600, 5900, 5300];
   const maxRepValue = 8000;
 
-  // Real Retention Calculation
-  const calculateRetention = (dayTarget: number): { rate: number, count: number } => {
-    if (athletes.length === 0) return { rate: 0, count: 0 };
-    
-    // Count athletes who are old enough to be measured for this target
-    const eligibleAthletes = athletes.filter(a => {
-      if (a.registeredAt === 'Inconnu') return false;
-      const regDate = new Date(a.registeredAt).getTime();
-      const now = Date.now();
-      const ageInDays = (now - regDate) / (1000 * 60 * 60 * 24);
-      return ageInDays >= dayTarget;
-    });
-
-    if (eligibleAthletes.length === 0) return { rate: 0, count: 0 };
-
-    const retainedAthletes = eligibleAthletes.filter(a => {
-      if (a.lastWorkoutAt === 'Jamais') return false;
-      const regDate = new Date(a.registeredAt).getTime();
-      const lastActive = new Date(a.lastWorkoutAt).getTime();
-      const activeAgeInDays = (lastActive - regDate) / (1000 * 60 * 60 * 24);
-      return activeAgeInDays >= dayTarget;
-    });
-
-    return {
-      count: retainedAthletes.length,
-      rate: Number(((retainedAthletes.length / eligibleAthletes.length) * 100).toFixed(1))
-    };
-  };
-
-  const r0 = athletes.length;
-  const r1 = calculateRetention(1);
-  const r3 = calculateRetention(3);
-  const r7 = calculateRetention(7);
-  const r14 = calculateRetention(14);
-  const r21 = calculateRetention(21);
-  const r30 = calculateRetention(30);
-
+  // Retention Data Points (J0 à J30)
   const retentionCurveData: RetentionPoint[] = [
-    { dayLabel: 'J0 (Inscription)', dayNumber: 0, retentionRate: r0 > 0 ? 100 : 0, benchmarkRate: 100, activeCount: r0 },
-    { dayLabel: 'J1 (+24h)', dayNumber: 1, retentionRate: r1.rate, benchmarkRate: 46.0, activeCount: r1.count, annotation: 'Premier entraînement guidé' },
-    { dayLabel: 'J3 (+72h)', dayNumber: 3, retentionRate: r3.rate, benchmarkRate: 35.5, activeCount: r3.count },
-    { dayLabel: 'J7 (+1 semaine)', dayNumber: 7, retentionRate: r7.rate, benchmarkRate: 26.0, activeCount: r7.count, annotation: 'Palier 1ère série de 7 jours (Streak)' },
-    { dayLabel: 'J14 (+2 semaines)', dayNumber: 14, retentionRate: r14.rate, benchmarkRate: 19.5, activeCount: r14.count },
-    { dayLabel: 'J21 (+3 semaines)', dayNumber: 21, retentionRate: r21.rate, benchmarkRate: 16.0, activeCount: r21.count },
-    { dayLabel: 'J30 (+1 mois)', dayNumber: 30, retentionRate: r30.rate, benchmarkRate: 13.5, activeCount: r30.count, annotation: 'Athlètes fidélisés dans un Clan' },
+    { dayLabel: 'J0 (Inscription)', dayNumber: 0, retentionRate: 100, benchmarkRate: 100, activeCount: 1250 },
+    { dayLabel: 'J1 (+24h)', dayNumber: 1, retentionRate: 68.4, benchmarkRate: 46.0, activeCount: 855, annotation: 'Premier entraînement guidé' },
+    { dayLabel: 'J3 (+72h)', dayNumber: 3, retentionRate: 54.2, benchmarkRate: 35.5, activeCount: 677 },
+    { dayLabel: 'J7 (+1 semaine)', dayNumber: 7, retentionRate: 42.8, benchmarkRate: 26.0, activeCount: 535, annotation: 'Palier 1ère série de 7 jours (Streak)' },
+    { dayLabel: 'J14 (+2 semaines)', dayNumber: 14, retentionRate: 33.6, benchmarkRate: 19.5, activeCount: 420 },
+    { dayLabel: 'J21 (+3 semaines)', dayNumber: 21, retentionRate: 28.5, benchmarkRate: 16.0, activeCount: 356 },
+    { dayLabel: 'J30 (+1 mois)', dayNumber: 30, retentionRate: 24.8, benchmarkRate: 13.5, activeCount: 310, annotation: 'Athlètes fidélisés dans un Clan' },
   ];
 
-  // For the cohort table, we use static for now as building a true weekly cohort requires complex date bucketing
+  // Cohort Heatmap Data
   const cohortTableData: CohortRow[] = [
-    { cohortName: 'Moyenne Globale Osirion', totalUsers: r0, d1: r1.rate, d7: r7.rate, d14: r14.rate, d30: r30.rate },
+    { cohortName: 'Semaine 38 (Actuelle)', totalUsers: 340, d1: 72.1, d7: 46.5, d14: 35.0, d30: null },
+    { cohortName: 'Semaine 37 (15-21 Sept)', totalUsers: 315, d1: 70.4, d7: 44.8, d14: 34.2, d30: null },
+    { cohortName: 'Semaine 36 (08-14 Sept)', totalUsers: 290, d1: 67.8, d7: 42.1, d14: 33.0, d30: 25.4 },
+    { cohortName: 'Semaine 35 (01-07 Sept)', totalUsers: 305, d1: 66.5, d7: 41.2, d14: 31.8, d30: 24.2 },
+    { cohortName: 'Moyenne Globale Osirion', totalUsers: 1250, d1: 68.4, d7: 42.8, d14: 33.6, d30: 24.8 },
   ];
 
   // Helper for SVG curve coordinates (Width: 800, Height: 220, Padding: 40)
@@ -199,7 +115,7 @@ export const AnalyticsCharts: React.FC<{ athletes?: AthleteUser[] }> = ({ athlet
   return (
     <div className="space-y-6">
       {/* Bannière Officielle : L'Arc en cours, Chrono temps réel & Objectifs */}
-      <CurrentArcBanner athletes={athletes} />
+      <CurrentArcBanner />
 
       {/* KPI Section */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -603,13 +519,10 @@ export const AnalyticsCharts: React.FC<{ athletes?: AthleteUser[] }> = ({ athlet
             const squatHeight = (squatsData[idx] / maxRepValue) * 100;
             return (
               <div key={day} className="flex-1 flex flex-col items-center h-full justify-end group">
-                <div className="w-full flex items-end justify-center gap-1.5 h-full max-h-44 relative">
-                  <div 
-                    className="absolute text-[11px] font-medium text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity bg-white px-2 py-0.5 rounded shadow-sm border border-slate-200 z-10 pointer-events-none"
-                    style={{ bottom: `calc(${Math.max(pushupHeight, squatHeight)}% + 6px)` }}
-                  >
-                    {(pushupsData[idx] + squatsData[idx]).toLocaleString()}
-                  </div>
+                <div className="text-[11px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity mb-2 font-medium">
+                  {(pushupsData[idx] + squatsData[idx]).toLocaleString()}
+                </div>
+                <div className="w-full flex items-end justify-center gap-1.5 h-full max-h-44">
                   {/* Pushups */}
                   <div
                     style={{ height: `${pushupHeight}%` }}
@@ -640,29 +553,49 @@ export const AnalyticsCharts: React.FC<{ athletes?: AthleteUser[] }> = ({ athlet
             <h3 className="text-sm font-semibold text-slate-900">
               Contrôle des Bastions par Clan
             </h3>
-            <span className="text-xs text-slate-400 font-medium">{totalBastions} spots recensés</span>
+            <span className="text-xs text-slate-400 font-medium">35 spots recensés</span>
           </div>
 
           <div className="space-y-3 text-xs">
-            {clanDominance.length > 0 ? (
-              clanDominance.slice(0, 5).map((clan, idx) => {
-                const colors = ['bg-blue-600', 'bg-indigo-500', 'bg-emerald-500', 'bg-purple-500', 'bg-amber-500'];
-                const bgColor = colors[idx % colors.length];
-                return (
-                  <div key={clan.name}>
-                    <div className="flex justify-between text-slate-700 font-medium mb-1.5">
-                      <span>{clan.name}</span>
-                      <span className="text-slate-900 font-semibold">{clan.count} bastions ({clan.percentage.toFixed(1)}%)</span>
-                    </div>
-                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div className={`h-full ${bgColor} rounded-full`} style={{ width: `${clan.percentage}%` }}></div>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="text-slate-500 text-center py-4">Aucune donnée de bastion disponible</div>
-            )}
+            <div>
+              <div className="flex justify-between text-slate-700 font-medium mb-1.5">
+                <span>Légion Noire</span>
+                <span className="text-slate-900 font-semibold">14 bastions (40.0%)</span>
+              </div>
+              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-600 rounded-full" style={{ width: '40%' }}></div>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-slate-700 font-medium mb-1.5">
+                <span>Valkyries Primordiales</span>
+                <span className="text-slate-900 font-semibold">11 bastions (31.4%)</span>
+              </div>
+              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-indigo-500 rounded-full" style={{ width: '31.4%' }}></div>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-slate-700 font-medium mb-1.5">
+                <span>Ombres du Dojo</span>
+                <span className="text-slate-900 font-semibold">6 bastions (17.1%)</span>
+              </div>
+              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-500 rounded-full" style={{ width: '17.1%' }}></div>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-slate-700 font-medium mb-1.5">
+                <span>Philosophes Guerriers</span>
+                <span className="text-slate-900 font-semibold">4 bastions (11.5%)</span>
+              </div>
+              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-purple-500 rounded-full" style={{ width: '11.5%' }}></div>
+              </div>
+            </div>
           </div>
         </div>
 

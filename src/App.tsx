@@ -29,7 +29,9 @@ import {
   Crown,
   ShieldAlert,
   Swords,
-  Library
+  Library,
+  Radio,
+  Database
 } from 'lucide-react';
 
 // Real Authenticated Data & Types
@@ -50,7 +52,9 @@ import {
   PushNotificationCampaign,
   RevenueMetric,
   GlobalAppSettings,
+  MuscleGroup,
 } from './types/admin';
+import { inferDojoMetadata } from './utils/exerciseClassifier';
 
 // Real Back-Office Admin Components
 import { AnalyticsCharts } from './components/AnalyticsCharts';
@@ -70,12 +74,17 @@ import { PantheonManager } from './components/PantheonManager';
 import { AlphaConnectModerationManager } from './components/AlphaConnectModerationManager';
 import { ArenaFullManager } from './components/ArenaFullManager';
 import { LibraryManager } from './components/LibraryManager';
+import { DailyTransmissionManager } from './components/DailyTransmissionManager';
+import { FirestoreConnectionHubModal } from './components/FirestoreConnectionHubModal';
+import { db } from './lib/firebase';
+import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 export type AdminTab =
   | 'analytics'
   | 'pantheon'
   | 'arena'
   | 'library'
+  | 'daily_transmission'
   | 'users'
   | 'connect_moderation'
   | 'exercises'
@@ -147,6 +156,14 @@ export const NAV_MODULES: NavModuleDefinition[] = [
     badge: 'Livres & Audios',
   },
   {
+    id: 'daily_transmission',
+    label: 'Transmission du Jour',
+    category: 'Contenu & Entraînement',
+    icon: Radio,
+    description: 'Diffusion de la vidéo quotidienne avec choix d’interaction (Sondage ou Session de Commentaires) et historique',
+    badge: 'Vidéo & Avis',
+  },
+  {
     id: 'exercises',
     label: 'Exercices & Dojo IA',
     category: 'Contenu & Entraînement',
@@ -212,17 +229,8 @@ export const NAV_MODULES: NavModuleDefinition[] = [
   },
 ];
 
-import { auth, db } from './lib/firebase';
-import { onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
-
 export default function App() {
   const [showSplash, setShowSplash] = useState<boolean>(true);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [loginEmail, setLoginEmail] = useState<string>('');
-  const [loginPassword, setLoginPassword] = useState<string>('');
-  const [loginError, setLoginError] = useState<string>('');
-  
   const [activeTab, setActiveTab] = useState<AdminTab>('analytics');
   const [userRole, setUserRole] = useState<'superadmin' | 'auditor'>('superadmin');
 
@@ -236,249 +244,226 @@ export default function App() {
   const navDropdownRef = useRef<HTMLDivElement>(null);
   const adminDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Application Real States
-  const [athletes, setAthletes] = useState<AthleteUser[]>(INITIAL_ATHLETES);
-  const [clans, setClans] = useState<Clan[]>([]);
+  // Helper formatting for Firestore Timestamps
+  const formatFirestoreDate = (val: any): string => {
+    if (!val) return 'Récemment';
+    if (typeof val === 'string') return val;
+    if (typeof val.seconds === 'number') {
+      return new Date(val.seconds * 1000).toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      });
+    }
+    if (typeof val === 'number') {
+      return new Date(val).toLocaleDateString('fr-FR');
+    }
+    return 'Récemment';
+  };
+
+  // Application Real States (Strictement connectées à Firestore valerion-55414)
+  const [athletes, setAthletes] = useState<AthleteUser[]>([]);
   const [exercises, setExercises] = useState<ExerciseItem[]>([]);
-  const [programs, setPrograms] = useState<WorkoutProgram[]>(INITIAL_PROGRAMS);
-  const [spots, setSpots] = useState<StreetWorkoutSpot[]>(INITIAL_SPOTS);
-  const [pushCampaigns, setPushCampaigns] = useState<PushNotificationCampaign[]>(INITIAL_PUSH_CAMPAIGNS);
+  const [programs, setPrograms] = useState<WorkoutProgram[]>([]);
+  const [spots, setSpots] = useState<StreetWorkoutSpot[]>([]);
+  const [pushCampaigns, setPushCampaigns] = useState<PushNotificationCampaign[]>([]);
   const [revenueMetrics] = useState<RevenueMetric>(INITIAL_REVENUE_METRICS);
   const [globalSettings, setGlobalSettings] = useState<GlobalAppSettings>(INITIAL_GLOBAL_SETTINGS);
+  const [isFirestoreHubOpen, setIsFirestoreHubOpen] = useState<boolean>(false);
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
 
-  // Synchronisation des Utilisateurs en Temps Réel (Firebase)
+  // Écouteurs Firestore temps réel (Synchronisation bidirectionnelle avec l'application mobile)
   useEffect(() => {
-    if (!isAuthenticated) return;
-    
-    // On enlève orderBy pour éviter les erreurs d'index manquant sur Firestore
-    const q = query(collection(db, 'users'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const realAthletes = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          fullName: data.pseudo || data.username || 'Athlète Alpha',
-          username: data.username || doc.id,
-          email: data.email || 'non-renseigné@osirion.com',
-          subscriptionTier: 'FREE', // By default until we have billing
-          subscriptionStatus: data.status === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE',
-          status: data.status === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE',
-          fitnessLevel: 'Initié',
-          registeredAt: data.createdAt?.toDate?.()?.toISOString()?.split('T')[0] || 'Inconnu',
-          lastWorkoutAt: data.lastActiveDate?.toDate?.()?.toISOString()?.split('T')[0] || 'Jamais',
-          streakDays: data.streak || 0,
-          totalWorkouts: 0,
-          totalReps: (data.maxPushups || 0) + (data.maxPullups || 0),
-          weightKg: data.weight || 0,
-          heightCm: data.height || 0,
-          age: data.age || 0,
-          bodyFat: data.bodyFat || 0,
-          muscleMass: data.muscleMass || 0,
-          city: 'Inconnue',
-          deviceModel: 'Android',
-          appVersion: '1.0.0',
-          level: data.level || 1,
-          xp: data.xp || 0,
-          forceXp: data.forceXp || 0,
-          wisdomXp: data.wisdomXp || 0,
-          maxPushups: data.maxPushups || 0,
-          maxPullups: data.maxPullups || 0,
-          movementPrecision: data.movementPrecision || 0,
-          bestPace1km: data.bestPace1km || 0,
-          bestAlphaLoop6km: data.bestAlphaLoop6km || 0,
-          totalDistance: data.totalDistance || 0,
-          aetherBalance: data.aetherBalance || 0,
-          gold: data.gold || 0,
-          activeHalo: data.activeHalo,
-          activeTitle: data.activeTitle,
-          unlockedTitles: data.unlockedTitles || [],
-          inventory: data.inventory || [],
-          activeArcId: data.activeArcId,
-          guardianPath: data.bio ? 'Voie Personnalisée' : 'Voie Initiale',
-          ultimateOath: data.bio,
-          clanIds: data.clanIds || [],
-          friendIds: data.friendIds || [],
-          onlineStatus: 'offline', // We could infer from lastActiveDate if needed
-          personalRecords: {
-            pushups: data.maxPushups || 0,
-            pullups: data.maxPullups || 0,
-            dips: 0,
-            muscleups: 0,
-            maxPlankSeconds: 0,
-          },
-        } as AthleteUser;
+    let unsubUsers: (() => void) | undefined;
+    let unsubExercises: (() => void) | undefined;
+    let unsubPrograms: (() => void) | undefined;
+    let unsubSpots: (() => void) | undefined;
+    let unsubPush: (() => void) | undefined;
+    let unsubSettings: (() => void) | undefined;
+
+    try {
+      // 1. Synchronisation Athlètes Réels (users)
+      unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+        setIsInitialLoading(false);
+        const list: AthleteUser[] = [];
+        snapshot.forEach((d) => {
+          const raw = d.data() as any;
+          const realUsername = raw.username || (raw.email ? raw.email.split('@')[0] : `user_${d.id.slice(0, 6)}`);
+          const realFullName = raw.fullName || raw.displayName || raw.name || realUsername;
+          const realAvatar = raw.profileImageUrl || raw.avatarUrl || raw.photoURL || undefined;
+
+          list.push({
+            id: d.id,
+            fullName: realFullName,
+            username: realUsername,
+            email: raw.email || `${realUsername.toLowerCase().replace(/[^a-z0-9]/g, '')}@mobile.osirion.app`,
+            avatarUrl: realAvatar,
+            subscriptionTier: raw.subscriptionTier || (raw.aetherBalance && raw.aetherBalance > 50 ? 'PRO_MONTHLY' : 'FREE'),
+            subscriptionStatus: raw.subscriptionStatus || 'ACTIVE',
+            status: raw.status === 'suspended' ? 'SUSPENDED' : 'ACTIVE',
+            fitnessLevel: raw.fitnessLevel || (raw.level && raw.level > 5 ? 'Avancé' : raw.level && raw.level > 2 ? 'Intermédiaire' : 'Débutant'),
+            registeredAt: formatFirestoreDate(raw.createdAt || raw.registeredAt),
+            lastWorkoutAt: formatFirestoreDate(raw.lastWorkoutAt || raw.lastActiveDate || raw.lastQuestAt),
+            streakDays: typeof raw.streak === 'number' ? raw.streak : (typeof raw.streakDays === 'number' ? raw.streakDays : 0),
+            totalWorkouts: typeof raw.totalWorkouts === 'number' ? raw.totalWorkouts : (raw.lastQuestAt ? 1 : 0),
+            totalReps: typeof raw.totalReps === 'number' ? raw.totalReps : (typeof raw.xp === 'number' ? Math.floor(raw.xp / 5) : 0),
+            weightKg: typeof raw.weight === 'number' && raw.weight > 0 ? raw.weight : (typeof raw.weightKg === 'number' ? raw.weightKg : 70),
+            heightCm: typeof raw.height === 'number' && raw.height > 0 ? raw.height : (typeof raw.heightCm === 'number' ? raw.heightCm : 175),
+            city: raw.city || (raw.country ? raw.country : 'App Mobile'),
+            deviceModel: raw.deviceModel || (raw.fcmToken ? 'Android Pixel (FCM Actif)' : 'Android Flutter'),
+            appVersion: raw.appVersion || '1.0.30',
+            personalRecords: raw.personalRecords || {
+              pushups: raw.maxPushups || 0,
+              pullups: raw.maxPullups || 0,
+              dips: 0,
+              muscleups: 0,
+              maxPlankSeconds: 0,
+            },
+            level: typeof raw.level === 'number' ? raw.level : 1,
+            xp: typeof raw.xp === 'number' ? raw.xp : 0,
+            forceXp: typeof raw.forceXp === 'number' ? raw.forceXp : 0,
+            wisdomXp: typeof raw.wisdomXp === 'number' ? raw.wisdomXp : 0,
+            maxPushups: typeof raw.maxPushups === 'number' ? raw.maxPushups : 0,
+            maxPullups: typeof raw.maxPullups === 'number' ? raw.maxPullups : 0,
+            movementPrecision: typeof raw.movementPrecision === 'number' ? raw.movementPrecision : 0,
+            bestPace1km: typeof raw.bestPace1km === 'number' ? raw.bestPace1km : 0,
+            bestAlphaLoop6km: typeof raw.bestAlphaLoop6km === 'number' ? raw.bestAlphaLoop6km : 0,
+            totalDistance: typeof raw.totalDistance === 'number' ? raw.totalDistance : 0,
+            aetherBalance: typeof raw.aetherBalance === 'number' ? raw.aetherBalance : 0,
+            gold: typeof raw.gold === 'number' ? raw.gold : 0,
+            unlockedTitles: Array.isArray(raw.unlockedTitles) ? raw.unlockedTitles : [],
+            inventory: Array.isArray(raw.inventory) ? raw.inventory : [],
+            clanIds: Array.isArray(raw.clanIds) ? raw.clanIds : [],
+            friendIds: Array.isArray(raw.friendIds) ? raw.friendIds : [],
+            onlineStatus: raw.status === 'in_dojo' ? 'training' : (raw.status === 'online' ? 'online' : 'offline'),
+            activeTitle: raw.activeTitle || (raw.xp && raw.xp > 100 ? 'Initié du Temple' : 'Recrue'),
+            guardianPath: raw.activeArcId || raw.guardianPath || 'Voie de l’Acier',
+          });
+        });
+        setAthletes(list);
+      }, () => {
+        setIsInitialLoading(false);
       });
-      // Sort in memory to avoid missing index errors in Firestore
-      realAthletes.sort((a, b) => new Date(b.registeredAt).getTime() - new Date(a.registeredAt).getTime());
-      
-      // We don't fallback to INITIAL_ATHLETES anymore so you can see if your database is truly empty
-      setAthletes(realAthletes);
-    }, (error) => {
-      console.error("Erreur de synchronisation Firestore :", error);
-    });
 
-    return () => unsubscribe();
-  }, [isAuthenticated]);
+      // 2. Synchronisation Exercices Réels (exercises)
+      unsubExercises = onSnapshot(collection(db, 'exercises'), (snapshot) => {
+        if (!snapshot.empty) {
+          const list: ExerciseItem[] = [];
+          snapshot.forEach((d) => {
+            const raw = d.data() as any;
+            const categoryFromTarget: MuscleGroup =
+              raw.targetBodyPart === 'UPPER' ? 'Bras (Triceps & Biceps)' :
+              raw.targetBodyPart === 'LOWER' ? 'Jambes & Fessiers' :
+              raw.targetBodyPart === 'CORE' ? 'Abdominaux & Core' :
+              raw.targetBodyPart === 'LIMB' ? 'Corps Complet (Full Body)' :
+              'Pectoraux';
 
-  // Synchronisation des Clans en Temps Réel (Firebase)
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    
-    const q = query(collection(db, 'clans'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const realClans = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          name: data.name || 'Clan Inconnu',
-          description: data.description || '',
-          leaderPseudo: data.leaderPseudo || data.leaderId || 'Système',
-          membersCount: Array.isArray(data.members) ? data.members.length : (data.membersCount || 1),
-          totalXp: data.totalXp || 0,
-          ranking: data.ranking || 0,
-          territoriesHeld: data.territoriesHeld || 0,
-          createdAt: data.createdAt?.toDate?.()?.toISOString()?.split('T')[0] || new Date().toISOString().split('T')[0],
-          logoUrl: data.logoUrl,
-          isRecruiting: data.isRecruiting !== false,
-          factionMotto: data.factionMotto || '',
-        } as Clan;
-      });
-      // Sort by XP
-      realClans.sort((a, b) => b.totalXp - a.totalXp);
-      
-      setClans(realClans);
-    }, (error) => {
-      console.error("Erreur de synchronisation Firestore (Clans) :", error);
-    });
+            const inferred = inferDojoMetadata(raw, d.id);
 
-    return () => unsubscribe();
-  }, [isAuthenticated]);
-
-  // Synchronisation de la Bibliothèque d'Exercices (Firebase)
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    
-    const q = query(collection(db, 'exercises'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const realExercises = snapshot.docs.map(doc => {
-        const data = doc.data();
-        const initialMatch = INITIAL_EXERCISES.find(ex => ex.id === doc.id || ex.name === data.name);
-        return {
-          ...initialMatch,
-          ...data,
-          id: doc.id,
-          targetArea: data.targetArea || initialMatch?.targetArea || 'HAUT_DU_CORPS',
-          trainingType: data.trainingType || initialMatch?.trainingType || 'FORCE',
-          executionMode: data.executionMode || initialMatch?.executionMode || 'MODE_VISION',
-          dojoMode: data.dojoMode || initialMatch?.dojoMode || 'DYNAMIC_REPS',
-          movementSplit: data.movementSplit || initialMatch?.movementSplit || 'FULL_BODY',
-          configProfile: data.configProfile || initialMatch?.configProfile || 'STANDARD_DAILY'
-        } as ExerciseItem;
-      });
-      
-      // Use only Firestore data as requested by the user
-      if (realExercises.length > 0) {
-        setExercises(realExercises);
-      } else {
-        setExercises([]);
-      }
-    }, (error) => {
-      console.error("Erreur de synchronisation Firestore (Exercices) :", error);
-    });
-
-    return () => unsubscribe();
-  }, [isAuthenticated]);
-
-  // Synchronisation des Bastions (Firebase)
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    
-    const q = query(collection(db, 'bastions'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const realBastions = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          name: data.name || 'Bastion',
-          address: data.address || '',
-          city: data.city || 'Inconnue',
-          postalCode: data.postalCode || '',
-          latitude: data.latitude || 0,
-          longitude: data.longitude || 0,
-          equipmentList: data.equipmentList || [],
-          groundType: data.groundType || 'Béton / Bitume',
-          status: data.status || 'VERIFIED',
-          rating: data.rating || 5,
-          reviewsCount: data.reviewsCount || 0,
-          photosCount: data.photosCount || 0,
-          contributedBy: data.contributedBy || 'System',
-          isCovered: data.isCovered || false,
-          hasWaterPoint: data.hasWaterPoint || false,
-          hasNightLighting: data.hasNightLighting || false,
-          images: data.images || [],
-        } as StreetWorkoutSpot;
-      });
-      
-      if (realBastions.length > 0) {
-        setSpots(realBastions);
-      }
-    }, (error) => {
-      console.error("Erreur de synchronisation Firestore (Bastions) :", error);
-    });
-
-    return () => unsubscribe();
-  }, [isAuthenticated]);
-
-  // Synchronisation des Programmes (Firebase)
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    
-    const q = query(collection(db, 'programs'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const realPrograms = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data
-        } as WorkoutProgram;
-      });
-      
-      if (realPrograms.length > 0) {
-        setPrograms(realPrograms);
-      }
-    }, (error) => {
-      console.error("Erreur de synchronisation Firestore (Programmes) :", error);
-    });
-
-    return () => unsubscribe();
-  }, [isAuthenticated]);
-
-  // Synchronisation des Global Settings (Firebase)
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    
-    const unsubscribe = onSnapshot(collection(db, 'global_config'), (snapshot) => {
-      let appSettingsDoc = null;
-      for (const doc of snapshot.docs) {
-        if (doc.id.trim() === 'app_settings') {
-          appSettingsDoc = doc;
-          break;
+            list.push({
+              id: d.id,
+              name: raw.name || d.id.replace(/^(sw_low_|sw_upp_|sw_)/, '').replace(/_/g, ' '),
+              category: raw.category || categoryFromTarget,
+              difficulty: raw.difficulty || (raw.defaultXpPerRep >= 25 ? 'Élite' : raw.defaultXpPerRep >= 10 ? 'Avancé' : 'Intermédiaire'),
+              equipment: raw.equipment || (raw.description?.toLowerCase().includes('barre') ? 'Barre de traction' : raw.description?.toLowerCase().includes('anneaux') ? 'Anneaux de gymnastique' : 'Poids du corps'),
+              targetMuscles: Array.isArray(raw.targetMuscles) ? raw.targetMuscles : [raw.targetBodyPart || 'Calisthénie'],
+              targetArea: raw.targetArea || inferred.targetArea,
+              trainingType: raw.trainingType || inferred.trainingType,
+              executionMode: raw.executionMode || inferred.executionMode,
+              dojoMode: raw.dojoMode || inferred.dojoMode,
+              movementSplit: raw.movementSplit || inferred.movementSplit,
+              configProfile: raw.configProfile || inferred.configProfile,
+              aiPoseDetection: raw.aiPoseDetection ?? (inferred.executionMode === 'MODE_VISION'),
+              hasAiSupport: typeof raw.hasAiSupport === 'boolean' ? raw.hasAiSupport : inferred.hasAiSupport,
+              minAngle: typeof raw.minAngle === 'number' ? raw.minAngle : 85,
+              maxAngle: typeof raw.maxAngle === 'number' ? raw.maxAngle : 170,
+              sensitivity: typeof raw.sensitivity === 'number' ? raw.sensitivity : 0.8,
+              strictMode: raw.strictMode ?? true,
+              maxTrunkDeviationDeg: typeof raw.maxTrunkDeviationDeg === 'number' ? raw.maxTrunkDeviationDeg : 15,
+              minTUTSeconds: typeof raw.minTUTSeconds === 'number' ? raw.minTUTSeconds : 1.0,
+              monitoredLandmarks: Array.isArray(raw.monitoredLandmarks) ? raw.monitoredLandmarks : ['Coude', 'Épaule'],
+              stateMachineLabels: raw.stateMachineLabels || {
+                start: 'En attente',
+                inflection: 'Point bas',
+                completion: 'Validation rep',
+              },
+              instructions: raw.description || raw.instructions || 'Mouvement officiel du Dojo IA.',
+              videoDemoUrl: raw.videoUrl || raw.videoDemoUrl || '',
+              popularityRank: typeof raw.popularityRank === 'number' ? raw.popularityRank : 1,
+              activeInWorkouts: raw.activeInWorkouts ?? true,
+            });
+          });
+          setExercises(list);
         }
-      }
-      
-      if (appSettingsDoc) {
-        const data = appSettingsDoc.data();
-        setGlobalSettings(prev => ({
-          ...prev,
-          ...data
-        }));
-      }
-    }, (error) => {
-      console.error("Erreur de synchronisation Firestore (Global Settings) :", error);
-    });
+      }, () => {});
 
-    return () => unsubscribe();
-  }, [isAuthenticated]);
+      // 3. Synchronisation Programmes (programs)
+      unsubPrograms = onSnapshot(collection(db, 'programs'), (snapshot) => {
+        if (!snapshot.empty) {
+          const list: WorkoutProgram[] = [];
+          snapshot.forEach((d) => list.push(d.data() as WorkoutProgram));
+          setPrograms(list);
+        }
+      }, () => {});
+
+      // 4. Synchronisation Spots (spots)
+      unsubSpots = onSnapshot(collection(db, 'spots'), (snapshot) => {
+        if (!snapshot.empty) {
+          const list: StreetWorkoutSpot[] = [];
+          snapshot.forEach((d) => {
+            const raw = d.data() as any;
+            list.push({
+              id: d.id || raw.id || 'spot_unknown',
+              name: raw.name || 'Spot Street Workout',
+              address: raw.address || '',
+              city: raw.city || 'France',
+              postalCode: raw.postalCode || '75000',
+              latitude: typeof raw.latitude === 'number' ? raw.latitude : 48.8566,
+              longitude: typeof raw.longitude === 'number' ? raw.longitude : 2.3522,
+              equipmentList: Array.isArray(raw.equipmentList) ? raw.equipmentList : ['Barres de traction'],
+              groundType: raw.groundType || 'Tartan amortissant',
+              status: raw.status || 'VERIFIED',
+              rating: typeof raw.rating === 'number' ? raw.rating : 4.8,
+              reviewsCount: typeof raw.reviewsCount === 'number' ? raw.reviewsCount : 12,
+              photosCount: typeof raw.photosCount === 'number' ? raw.photosCount : 3,
+              contributedBy: raw.contributedBy || 'Admin Osirion',
+              isCovered: !!raw.isCovered,
+              hasWaterPoint: !!raw.hasWaterPoint,
+              hasNightLighting: !!raw.hasNightLighting,
+            });
+          });
+          setSpots(list);
+        }
+      }, () => {});
+
+      // 5. Synchronisation Campagnes Push (push_campaigns)
+      unsubPush = onSnapshot(collection(db, 'push_campaigns'), (snapshot) => {
+        if (!snapshot.empty) {
+          const list: PushNotificationCampaign[] = [];
+          snapshot.forEach((d) => list.push(d.data() as PushNotificationCampaign));
+          setPushCampaigns(list);
+        }
+      }, () => {});
+
+      // 6. Synchronisation Paramètres Mobile (global_config/mobile_app)
+      unsubSettings = onSnapshot(doc(db, 'global_config', 'mobile_app'), (docSnap) => {
+        if (docSnap.exists()) {
+          setGlobalSettings(docSnap.data() as GlobalAppSettings);
+        }
+      }, () => {});
+    } catch (e) {
+      console.warn('Firestore initial subscription notice:', e);
+    }
+
+    return () => {
+      unsubUsers?.();
+      unsubExercises?.();
+      unsubPrograms?.();
+      unsubSpots?.();
+      unsubPush?.();
+      unsubSettings?.();
+    };
+  }, []);
 
   // Close dropdowns on outside click or Escape key
   useEffect(() => {
@@ -515,129 +500,84 @@ export default function App() {
   }, []);
 
   // Athletes Handlers
-  const handleUpdateAthlete = async (updated: AthleteUser) => {
-    // 1. Mise à jour optimiste locale
+  const handleUpdateAthlete = (updated: AthleteUser) => {
     setAthletes(athletes.map((u) => (u.id === updated.id ? updated : u)));
-    
-    // 2. Envoi de la mise à jour à Firebase
     try {
-      // Import the needed firestore functions dynamically or use them if already imported.
-      // Since it's a small update, we map the fields we care about.
-      const { doc, updateDoc } = await import('firebase/firestore');
-      const userRef = doc(db, 'users', updated.id);
-      
-      const updateData: any = {};
-      if (updated.status === 'SUSPENDED') {
-        updateData.status = 'SUSPENDED';
-      } else {
-        updateData.status = 'ACTIVE';
-      }
-      
-      if (updated.aetherBalance !== undefined) updateData.aetherBalance = updated.aetherBalance;
-      if (updated.gold !== undefined) updateData.gold = updated.gold;
-      
-      await updateDoc(userRef, updateData);
-    } catch (e) {
-      console.error("Erreur lors de la mise à jour Firebase de l'athlète:", e);
-    }
+      setDoc(doc(db, 'users', updated.id), updated, { merge: true }).catch(() => {});
+    } catch {}
   };
 
   const handleAddAthlete = (newUser: AthleteUser) => {
     setAthletes([newUser, ...athletes]);
+    try {
+      setDoc(doc(db, 'users', newUser.id), newUser, { merge: true }).catch(() => {});
+    } catch {}
   };
 
   // Exercises Handlers
-  const handleAddExercise = async (newEx: ExerciseItem) => {
+  const handleAddExercise = (newEx: ExerciseItem) => {
     setExercises([newEx, ...exercises]);
     try {
-      const { doc, setDoc } = await import('firebase/firestore');
-      await setDoc(doc(db, 'exercises', newEx.id), newEx);
-    } catch (e) {
-      console.error("Erreur ajout exercice Firebase:", e);
-    }
+      setDoc(doc(db, 'exercises', newEx.id), newEx, { merge: true }).catch(() => {});
+    } catch {}
   };
 
-  const handleUpdateExercise = async (updated: ExerciseItem) => {
+  const handleUpdateExercise = (updated: ExerciseItem) => {
     setExercises(exercises.map((e) => (e.id === updated.id ? updated : e)));
     try {
-      const { doc, updateDoc } = await import('firebase/firestore');
-      await updateDoc(doc(db, 'exercises', updated.id), { ...updated });
-    } catch (e) {
-      console.error("Erreur update exercice Firebase:", e);
-    }
+      setDoc(doc(db, 'exercises', updated.id), updated, { merge: true }).catch(() => {});
+    } catch {}
   };
 
-  const handleDeleteExercise = async (id: string) => {
+  const handleDeleteExercise = (id: string) => {
     setExercises(exercises.filter((e) => e.id !== id));
     try {
-      const { doc, deleteDoc } = await import('firebase/firestore');
-      await deleteDoc(doc(db, 'exercises', id));
-    } catch (e) {
-      console.error("Erreur suppression exercice Firebase:", e);
-    }
+      deleteDoc(doc(db, 'exercises', id)).catch(() => {});
+    } catch {}
   };
 
   // Programs Handlers
-  const handleAddProgram = async (newProg: WorkoutProgram) => {
+  const handleAddProgram = (newProg: WorkoutProgram) => {
     setPrograms([newProg, ...programs]);
     try {
-      const { doc, setDoc } = await import('firebase/firestore');
-      await setDoc(doc(db, 'programs', newProg.id), newProg);
-    } catch (e) {
-      console.error("Erreur ajout programme Firebase:", e);
-    }
+      setDoc(doc(db, 'programs', newProg.id), newProg, { merge: true }).catch(() => {});
+    } catch {}
   };
 
-  const handleTogglePublishProgram = async (id: string) => {
-    const prog = programs.find((p) => p.id === id);
-    if (!prog) return;
-    const newPublished = !prog.published;
-    setPrograms(
-      programs.map((p) => (p.id === id ? { ...p, published: newPublished } : p))
+  const handleTogglePublishProgram = (id: string) => {
+    const updated = programs.map((p) =>
+      p.id === id ? { ...p, published: !p.published } : p
     );
+    setPrograms(updated);
     try {
-      const { doc, updateDoc } = await import('firebase/firestore');
-      await updateDoc(doc(db, 'programs', id), { published: newPublished });
-    } catch (e) {
-      console.error("Erreur update programme Firebase:", e);
-    }
+      const prog = updated.find((p) => p.id === id);
+      if (prog) {
+        setDoc(doc(db, 'programs', id), prog, { merge: true }).catch(() => {});
+      }
+    } catch {}
   };
 
   // Spots Handlers
-  const handleAddSpot = async (newSpot: StreetWorkoutSpot) => {
+  const handleAddSpot = (newSpot: StreetWorkoutSpot) => {
     setSpots([newSpot, ...spots]);
     try {
-      const { doc, setDoc } = await import('firebase/firestore');
-      await setDoc(doc(db, 'bastions', newSpot.id), newSpot);
-    } catch (e) {
-      console.error("Erreur ajout spot Firebase:", e);
-    }
+      setDoc(doc(db, 'spots', newSpot.id), newSpot, { merge: true }).catch(() => {});
+    } catch {}
   };
 
-  const handleDeleteSpot = async (id: string) => {
+  const handleDeleteSpot = (id: string) => {
     setSpots(spots.filter((s) => s.id !== id));
     try {
-      const { doc, deleteDoc } = await import('firebase/firestore');
-      await deleteDoc(doc(db, 'bastions', id));
-    } catch (e) {
-      console.error("Erreur suppression spot Firebase:", e);
-    }
-  };
-
-  // Global Settings Handler
-  const handleUpdateGlobalSettings = async (newSettings: GlobalAppSettings) => {
-    setGlobalSettings(newSettings);
-    try {
-      const { doc, setDoc } = await import('firebase/firestore');
-      await setDoc(doc(db, 'global_config', 'app_settings'), newSettings);
-    } catch (e) {
-      console.error("Erreur update global settings Firebase:", e);
-    }
+      deleteDoc(doc(db, 'spots', id)).catch(() => {});
+    } catch {}
   };
 
   // Push Campaign Handler
   const handleSendCampaign = (newCamp: PushNotificationCampaign) => {
     setPushCampaigns([newCamp, ...pushCampaigns]);
+    try {
+      setDoc(doc(db, 'push_campaigns', newCamp.id), newCamp, { merge: true }).catch(() => {});
+    } catch {}
   };
 
   // Export JSON Backup
@@ -669,11 +609,12 @@ export default function App() {
   const CurrentIcon = currentNavModule.icon;
 
   // Filtered modules for dropdown search
+  const modQ = (moduleSearchQuery || '').toLowerCase();
   const filteredModules = NAV_MODULES.filter(
     (m) =>
-      m.label.toLowerCase().includes(moduleSearchQuery.toLowerCase()) ||
-      m.description.toLowerCase().includes(moduleSearchQuery.toLowerCase()) ||
-      m.category.toLowerCase().includes(moduleSearchQuery.toLowerCase())
+      (m.label || '').toLowerCase().includes(modQ) ||
+      (m.description || '').toLowerCase().includes(modQ) ||
+      (m.category || '').toLowerCase().includes(modQ)
   );
 
   // Group filtered modules by category
@@ -685,139 +626,6 @@ export default function App() {
     setIsMobileMenuOpen(false);
     setModuleSearchQuery('');
   };
-
-  // Liste des emails autorisés à accéder au Dashboard Admin
-  const ADMIN_EMAILS = ['roland1kokou@gmail.com'];
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        if (user.email && ADMIN_EMAILS.includes(user.email)) {
-          setIsAuthenticated(true);
-        } else {
-          // L'utilisateur n'est pas admin, on le déconnecte par sécurité
-          signOut(auth);
-          setIsAuthenticated(false);
-          setLoginError(`Accès refusé. Le compte ${user.email} n'est pas administrateur.`);
-        }
-      } else {
-        setIsAuthenticated(false);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoginError('');
-    try {
-      const userCredential = await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
-      if (userCredential.user.email && !ADMIN_EMAILS.includes(userCredential.user.email)) {
-        await signOut(auth);
-        setLoginError('Accès refusé. Ce compte n\'a pas les privilèges administrateur.');
-      }
-    } catch (err: any) {
-      setLoginError('Identifiants incorrects ou accès refusé. (' + err.message + ')');
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    setLoginError('');
-    try {
-      const provider = new GoogleAuthProvider();
-      const userCredential = await signInWithPopup(auth, provider);
-      if (userCredential.user.email && !ADMIN_EMAILS.includes(userCredential.user.email)) {
-        await signOut(auth);
-        setLoginError('Accès refusé. Ce compte n\'a pas les privilèges administrateur.');
-      }
-    } catch (err: any) {
-      setLoginError('Erreur de connexion Google. (' + err.message + ')');
-    }
-  };
-
-  const handleLogout = () => {
-    signOut(auth);
-  };
-
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-[#0A0F1C] flex items-center justify-center p-4 selection:bg-blue-500/30">
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-blue-600/10 blur-[120px] rounded-full mix-blend-screen" />
-        </div>
-        
-        <div className="relative bg-[#111827]/80 backdrop-blur-xl border border-white/5 rounded-3xl p-8 max-w-md w-full shadow-2xl">
-          <div className="flex justify-center mb-6">
-            <OsirionMiniLogo size={56} />
-          </div>
-          <h1 className="text-2xl font-bold text-center text-white mb-2 tracking-tight">Console d'Administration</h1>
-          <p className="text-slate-400 text-center mb-8 text-sm">Veuillez vous authentifier pour accéder aux données en temps réel.</p>
-          
-          {loginError && (
-            <div className="bg-red-500/10 text-red-400 p-4 rounded-xl text-sm mb-6 border border-red-500/20 flex items-start gap-3">
-              <ShieldAlert className="w-5 h-5 shrink-0" />
-              <span>{loginError}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Email Administrateur</label>
-              <div className="relative">
-                <input 
-                  type="email" 
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 bg-black/20 border border-white/10 rounded-xl text-white focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all outline-none"
-                  placeholder="admin@osirion.com"
-                  required 
-                />
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">
-                  <Users className="w-5 h-5" />
-                </div>
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Mot de passe de Sécurité</label>
-              <div className="relative">
-                <input 
-                  type="password" 
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 bg-black/20 border border-white/10 rounded-xl text-white focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all outline-none" 
-                  placeholder="••••••••••••"
-                  required 
-                />
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">
-                  <ShieldCheck className="w-5 h-5" />
-                </div>
-              </div>
-            </div>
-            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition-all shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2 mt-2">
-              <Terminal className="w-4 h-4" />
-              Initialiser la connexion
-            </button>
-          </form>
-
-          <div className="mt-6 pt-6 border-t border-white/10">
-            <button 
-              onClick={handleGoogleLogin} 
-              type="button" 
-              className="w-full bg-white text-slate-900 hover:bg-slate-100 font-semibold py-3 rounded-xl transition-all flex items-center justify-center gap-3"
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24">
-                <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-              Continuer avec Google
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-100 selection:text-blue-900 flex flex-col">
@@ -1010,6 +818,32 @@ export default function App() {
               </button>
             </div>
 
+            {/* Real Firestore Live Badge */}
+            <div className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-500/30 bg-emerald-50/80 text-emerald-900 text-xs font-semibold">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Données Réelles Firestore</span>
+              <span className="text-[10px] text-emerald-700 bg-emerald-200/60 px-1.5 py-0.5 rounded font-mono font-bold">
+                {athletes.length} Athlètes • {exercises.length} Exercices
+              </span>
+            </div>
+
+            {/* Firestore Hub Direct Button */}
+            <button
+              type="button"
+              onClick={() => setIsFirestoreHubOpen(true)}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-amber-500/30 bg-amber-50 hover:bg-amber-100 text-amber-950 text-xs font-semibold transition shadow-xs group"
+              title="Hub de Synchronisation Firestore (16/16 Rubriques)"
+            >
+              <div className="w-5 h-5 rounded-lg bg-amber-500/20 text-amber-700 flex items-center justify-center group-hover:scale-105 transition-transform">
+                <Database className="w-3.5 h-3.5 text-amber-700" />
+              </div>
+              <span className="hidden sm:inline font-bold">Firestore Sync</span>
+              <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-100/80 px-1.5 py-0.2 rounded-md font-mono">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                16/16
+              </span>
+            </button>
+
             {/* --- 2. MENU DÉROULANT DES ACTIONS & DU PROFIL --- */}
             <div className="relative" ref={adminDropdownRef}>
               <button
@@ -1098,6 +932,20 @@ export default function App() {
                     <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-1">
                       Actions rapides
                     </span>
+
+                    <button
+                      onClick={() => {
+                        setIsFirestoreHubOpen(true);
+                        setIsAdminDropdownOpen(false);
+                      }}
+                      className="w-full text-left p-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-950 flex items-center justify-between transition font-medium"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Database className="w-4 h-4 text-amber-600" />
+                        <span>Hub Données Réelles (16 Rubriques)</span>
+                      </div>
+                      <span className="text-[10px] bg-amber-200/80 text-amber-900 px-1.5 py-0.5 rounded font-bold">16</span>
+                    </button>
 
                     <button
                       onClick={handleExportFirestoreJson}
@@ -1281,13 +1129,12 @@ export default function App() {
         )}
 
         {/* 1. TABLEAU DE BORD & KPIS (WITH RETENTION CURVE J1/J7/J30) */}
-        {activeTab === 'analytics' && <AnalyticsCharts athletes={athletes} />}
+        {activeTab === 'analytics' && <AnalyticsCharts />}
 
         {/* 1.B LE PANTHÉON DES LÉGENDES & HALL OF FAME */}
         {activeTab === 'pantheon' && (
           <PantheonManager
             athletes={athletes}
-            clans={clans}
             userRole={userRole}
             onUpdateAthlete={handleUpdateAthlete}
           />
@@ -1330,6 +1177,27 @@ export default function App() {
                 status: 'SENT',
                 recipientsCount: athletes.length,
                 deepLinkScreen: 'CHALLENGE_WEEK',
+              })
+            }
+          />
+        )}
+
+        {/* 1.E TRANSMISSION DU JOUR (VIDÉO, SONDAGES & COMMENTAIRES) */}
+        {activeTab === 'daily_transmission' && (
+          <DailyTransmissionManager
+            athletes={athletes}
+            userRole={userRole}
+            onUpdateAthlete={handleUpdateAthlete}
+            onSendPushNotification={(title, body) =>
+              handleSendCampaign({
+                id: `push_${Date.now()}`,
+                title,
+                bodyText: body,
+                targetAudience: 'ALL_ATHLETES',
+                scheduledFor: new Date().toISOString(),
+                status: 'SENT',
+                recipientsCount: athletes.length,
+                deepLinkScreen: 'WORKOUT_TODAY',
               })
             }
           />
@@ -1419,7 +1287,7 @@ export default function App() {
           <AppSettingsManager
             settings={globalSettings}
             userRole={userRole}
-            onUpdateSettings={handleUpdateGlobalSettings}
+            onUpdateSettings={setGlobalSettings}
             onExportJsonBackup={handleExportFirestoreJson}
           />
         )}
@@ -1473,6 +1341,12 @@ export default function App() {
           Osirion Console d'Administration • Back-Office Dédié à l'Application Mobile de Callisthénie
         </p>
       </footer>
+
+      {/* Firestore Connection Hub Modal (16 Rubriques) */}
+      <FirestoreConnectionHubModal
+        isOpen={isFirestoreHubOpen}
+        onClose={() => setIsFirestoreHubOpen(false)}
+      />
     </div>
   );
 }

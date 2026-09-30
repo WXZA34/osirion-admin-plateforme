@@ -100,13 +100,14 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
   // Filtrage des athlètes
   const filteredUsers = users.filter((u) => {
+    const q = (searchTerm || '').toLowerCase();
     const matchesSearch =
-      u.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.city.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (u.activeTitle && u.activeTitle.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (u.guardianPath && u.guardianPath.toLowerCase().includes(searchTerm.toLowerCase()));
+      (u.fullName || '').toLowerCase().includes(q) ||
+      (u.username || '').toLowerCase().includes(q) ||
+      (u.email || '').toLowerCase().includes(q) ||
+      (u.city || '').toLowerCase().includes(q) ||
+      ((u.activeTitle || '').toLowerCase().includes(q)) ||
+      ((u.guardianPath || '').toLowerCase().includes(q));
 
     const matchesTier = tierFilter === 'ALL' || u.subscriptionTier === tierFilter;
     const matchesStatus = statusFilter === 'ALL' || u.status === statusFilter;
@@ -460,7 +461,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                               : 'bg-gradient-to-tr from-blue-700 to-sky-500'
                           }`}
                         >
-                          {user.username.slice(0, 2).toUpperCase()}
+                          {(user.username || user.fullName || 'OS').slice(0, 2).toUpperCase()}
                         </div>
                         {/* Indicateur de statut en ligne */}
                         <span
@@ -630,7 +631,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-xl bg-slate-900 text-white font-bold flex items-center justify-center text-xs shrink-0">
-                          {user.username.slice(0, 2).toUpperCase()}
+                          {(user.username || user.fullName || 'OS').slice(0, 2).toUpperCase()}
                         </div>
                         <div>
                           <div className="font-bold text-slate-900">{user.fullName}</div>
@@ -721,7 +722,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
             <div className="flex items-start justify-between border-b border-slate-100 pb-4 gap-4">
               <div className="flex items-center gap-3.5">
                 <div className="w-14 h-14 rounded-2xl bg-slate-900 text-white font-black text-lg flex items-center justify-center shadow-md">
-                  {inspectedUser.username.slice(0, 2).toUpperCase()}
+                  {(inspectedUser.username || inspectedUser.fullName || 'OS').slice(0, 2).toUpperCase()}
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">

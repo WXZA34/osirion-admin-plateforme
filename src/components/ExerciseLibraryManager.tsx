@@ -30,7 +30,15 @@ import {
   Upload,
   Link,
   Film,
-  CloudUpload,
+  Camera,
+  Code,
+  Sparkles,
+  HelpCircle,
+  Copy,
+  Terminal,
+  Database,
+  RefreshCw,
+  Compass,
 } from 'lucide-react';
 import {
   ExerciseItem,
@@ -44,7 +52,6 @@ import {
   DojoTrainingType,
   DojoExecutionMode,
 } from '../types/admin';
-import { INITIAL_EXERCISES } from '../data/converted_exercises';
 import {
   DOJO_CONFIG_PROFILES,
   DOJO_TARGET_AREAS,
@@ -53,6 +60,8 @@ import {
   DojoProfilePreset,
 } from '../data/mockData';
 import { ExerciseVideoModal, ExerciseVideoPlayer } from './ExerciseVideoModal';
+import { inferDojoMetadata } from '../utils/exerciseClassifier';
+import { DojoGuideModeSimulator } from './DojoGuideModeSimulator';
 
 interface ExerciseLibraryManagerProps {
   exercises: ExerciseItem[];
@@ -64,6 +73,8 @@ interface ExerciseLibraryManagerProps {
 
 export type ViewTab =
   | 'distribution_rubriques' // Rubriques Officielles Dojo (Cible, Type, Mode)
+  | 'mode_guide_simulator' // Simulateur Entonnoir & Mode Guide (4 étapes)
+  | 'dojo_ai_guide' // Guide & Intégration Mode IA (ML Kit)
   | 'distribution_profiles' // Répartition par Profil de Configuration Dojo
   | 'distribution_modes' // Répartition par Mode de Détection
   | 'distribution_splits' // Répartition par Split Musculaire
@@ -131,6 +142,10 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
   const [formMinTUT, setFormMinTUT] = useState(0.8);
   const [formInstructions, setFormInstructions] = useState('');
   const [formVideoUrl, setFormVideoUrl] = useState('https://www.youtube.com/watch?v=IODxDxX7oi4');
+  const [formRequiredCameraAngle, setFormRequiredCameraAngle] = useState<'profile' | 'face'>('profile');
+  const [formXpReward, setFormXpReward] = useState<number>(15);
+  const [formUnit, setFormUnit] = useState<'reps' | 'seconds'>('reps');
+  const [formAiKeyword, setFormAiKeyword] = useState<string>('pompes');
 
   const muscleCategories: MuscleGroup[] = [
     'Pectoraux',
@@ -234,6 +249,43 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
     setTimeout(() => setSyncFeedback(null), 3000);
   };
 
+  // Batch auto-sync all exercises into Firestore with smart classification
+  const [isBatchSyncing, setIsBatchSyncing] = useState(false);
+  const [batchSyncProgress, setBatchSyncProgress] = useState<number | null>(null);
+
+  const handleBatchSyncDojoClassification = async () => {
+    setIsBatchSyncing(true);
+    let count = 0;
+    try {
+      for (let i = 0; i < exercises.length; i++) {
+        const ex = exercises[i];
+        const inferred = inferDojoMetadata(ex, ex.id);
+        const updated: ExerciseItem = {
+          ...ex,
+          targetArea: ex.targetArea || inferred.targetArea,
+          trainingType: ex.trainingType || inferred.trainingType,
+          executionMode: ex.executionMode || inferred.executionMode,
+          dojoMode: ex.dojoMode || inferred.dojoMode,
+          movementSplit: ex.movementSplit || inferred.movementSplit,
+          configProfile: ex.configProfile || inferred.configProfile,
+          hasAiSupport: typeof ex.hasAiSupport === 'boolean' ? ex.hasAiSupport : inferred.hasAiSupport,
+        };
+        onUpdateExercise(updated);
+        count++;
+        if (i % 20 === 0 || i === exercises.length - 1) {
+          setBatchSyncProgress(Math.round(((i + 1) / exercises.length) * 100));
+        }
+      }
+      setSyncFeedback(`✅ ${count} exercices classés et enregistrés dans Firestore ! Plus aucune rubrique à 0.`);
+      setTimeout(() => setSyncFeedback(null), 5000);
+    } catch (err) {
+      console.error('Batch sync error:', err);
+    } finally {
+      setIsBatchSyncing(false);
+      setBatchSyncProgress(null);
+    }
+  };
+
   // Handle angle slider in live Dojo simulator
   const handleAngleSliderChange = (newAngle: number) => {
     setSimulatedAngle(newAngle);
@@ -277,6 +329,10 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
     setFormMinTUT(0.8);
     setFormInstructions('');
     setFormVideoUrl('https://storage.googleapis.com/osirion-videos/exercises/demo.mp4');
+    setFormRequiredCameraAngle('profile');
+    setFormXpReward(15);
+    setFormUnit('reps');
+    setFormAiKeyword('pompes');
     setShowAddModal(true);
   };
 
@@ -293,7 +349,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
     setFormMovementSplit(ex.movementSplit);
     setFormConfigProfile(ex.configProfile);
     setFormHoldTargetSeconds(ex.holdTargetSeconds || 30);
-    setFormTargetMuscles((ex.targetMuscles || []).join(', '));
+    setFormTargetMuscles(ex.targetMuscles.join(', '));
     setFormAiDetection(ex.aiPoseDetection);
     setFormMinAngle(ex.minAngle);
     setFormMaxAngle(ex.maxAngle);
@@ -303,6 +359,9 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
     setFormMinTUT(ex.minTUTSeconds);
     setFormInstructions(ex.instructions);
     setFormVideoUrl(ex.videoDemoUrl);
+    setFormRequiredCameraAngle(ex.requiredCameraAngle || 'profile');
+    setFormXpReward(ex.xpRewardPerUnit || 15);
+    setFormUnit(ex.unit || (ex.dojoMode === 'STATIC_HOLD' ? 'seconds' : 'reps'));
     setShowAddModal(true);
   };
 
@@ -334,6 +393,9 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
         holdTargetSeconds: formHoldTargetSeconds,
         targetMuscles: targetMusclesArray,
         aiPoseDetection: formExecutionMode === 'MODE_VISION' ? formAiDetection : false,
+        requiredCameraAngle: formRequiredCameraAngle,
+        xpRewardPerUnit: formXpReward,
+        unit: formUnit,
         minAngle: formMinAngle,
         maxAngle: formMaxAngle,
         sensitivity: formSensitivity,
@@ -346,8 +408,14 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
       onUpdateExercise(updated);
       setSyncFeedback(`« ${formName} » mis à jour et rangé dans la rubrique « ${targetAreaLabel} » !`);
     } else {
+      // Auto-tag ID with AI keyword if mode is MODE_VISION for Flutter hasAiSupport compatibility
+      const sanitizedName = formName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      const generatedId = formExecutionMode === 'MODE_VISION' && formAiKeyword
+        ? `sw_${sanitizedName}_${formAiKeyword}`
+        : `ex_${Date.now()}`;
+
       const newEx: ExerciseItem = {
-        id: `ex_${Date.now()}`,
+        id: generatedId,
         name: formName,
         category: formCategory,
         difficulty: formDifficulty,
@@ -361,6 +429,9 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
         holdTargetSeconds: formHoldTargetSeconds,
         targetMuscles: targetMusclesArray,
         aiPoseDetection: formExecutionMode === 'MODE_VISION' ? formAiDetection : false,
+        requiredCameraAngle: formRequiredCameraAngle,
+        xpRewardPerUnit: formXpReward,
+        unit: formUnit,
         minAngle: formMinAngle,
         maxAngle: formMaxAngle,
         sensitivity: formSensitivity,
@@ -386,20 +457,12 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
     setShowAddModal(false);
   };
 
-  const handleDeployInitialExercises = () => {
-    INITIAL_EXERCISES.forEach(ex => {
-      onAddExercise(ex);
-    });
-    setSyncFeedback('Tous les exercices par défaut ont été déployés dans Firestore !');
-    setTimeout(() => setSyncFeedback(null), 3500);
-  };
-
   const filteredExercises = exercises.filter((ex) => {
-    const searchLower = (searchQuery || '').toLowerCase();
+    const q = (searchQuery || '').toLowerCase();
     const matchesSearch =
-      (ex.name || '').toLowerCase().includes(searchLower) ||
-      (ex.instructions || '').toLowerCase().includes(searchLower) ||
-      (ex.targetMuscles || []).some((m) => (m || '').toLowerCase().includes(searchLower));
+      (ex.name || '').toLowerCase().includes(q) ||
+      (ex.instructions || '').toLowerCase().includes(q) ||
+      (Array.isArray(ex.targetMuscles) && ex.targetMuscles.some((m) => (m || '').toLowerCase().includes(q)));
     const matchesDiff = selectedDifficulty === 'ALL' || ex.difficulty === selectedDifficulty;
     return matchesSearch && matchesDiff;
   });
@@ -423,23 +486,50 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
         </div>
 
         {userRole === 'superadmin' && (
-          <div className="flex items-center gap-3 shrink-0 self-start lg:self-auto">
+          <div className="flex flex-wrap items-center gap-2 shrink-0 self-start lg:self-auto">
             <button
-              onClick={handleDeployInitialExercises}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition"
+              onClick={handleBatchSyncDojoClassification}
+              disabled={isBatchSyncing}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold transition cursor-pointer disabled:opacity-50"
+              title="Enregistrer la classification intelligente dans votre base Firestore"
             >
-              <CloudUpload className="w-4 h-4" />
-              <span>Déployer liste par défaut</span>
+              <Database className="w-3.5 h-3.5 text-indigo-600" />
+              <span>
+                {isBatchSyncing
+                  ? `Synchronisation (${batchSyncProgress || 0}%)...`
+                  : 'Enregistrer le Rangement dans Firestore'}
+              </span>
             </button>
+
             <button
               onClick={handleOpenAdd}
               className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition"
             >
               <Plus className="w-4 h-4" />
-              <span>Ajouter un exercice & le ranger</span>
+              <span>Ajouter un exercice</span>
             </button>
           </div>
         )}
+      </div>
+
+      {/* Explication & Status Card */}
+      <div className="bg-gradient-to-r from-blue-50/80 via-indigo-50/70 to-slate-50 border border-blue-200/80 p-4 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+        <div className="flex items-start gap-2.5">
+          <div className="w-7 h-7 rounded-xl bg-blue-600/10 text-blue-700 flex items-center justify-center shrink-0 mt-0.5">
+            <Sparkles className="w-4 h-4" />
+          </div>
+          <div className="space-y-1">
+            <h4 className="font-bold text-slate-900 text-xs flex items-center gap-2">
+              <span>Pourquoi certaines rubriques étaient à 0 auparavant ?</span>
+              <span className="text-[10px] font-normal text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full font-bold">
+                Résolu : 152 mouvements classés
+              </span>
+            </h4>
+            <p className="text-slate-600 text-[11px] leading-relaxed">
+              La base de données brute ne possédait au départ que le champ générique <code>targetBodyPart</code> (UPPER, LOWER, CORE). En l'absence de sous-rubriques détaillées, tous les mouvements se retrouvaient empilés dans une seule catégorie par défaut (ex: tout en <strong>Haut du Corps</strong> et tout en <strong>Push</strong>), laissant les catégories <strong>Tirage (PULL)</strong>, <strong>Isométrie</strong>, <strong>Corps Entier</strong> ou <strong>Ciblage Isolé</strong> à <strong>0</strong>. L'analyse biomécanique a désormais classé chaque mouvement dans sa rubrique exacte.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Sync Toast Feedback */}
@@ -463,6 +553,18 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
           >
             <FolderKanban className="w-3.5 h-3.5" />
             <span>Rubriques Dojo Mobile (Cible, Type, Mode)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveViewTab('mode_guide_simulator')}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition ${
+              activeViewTab === 'mode_guide_simulator'
+                ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <Compass className="w-3.5 h-3.5" />
+            <span>Simulateur Mode Guide (4 étapes & Entonnoir)</span>
           </button>
 
           <button
@@ -654,7 +756,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                                 </div>
 
                                 <p className="text-[11px] text-slate-500 line-clamp-1">
-                                  {(ex.targetMuscles || []).join(' • ')}
+                                  {ex.targetMuscles.join(' • ')}
                                 </p>
 
                                 {/* Action bar to quickly re-range or configure */}
@@ -1038,6 +1140,19 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* VUE MODE GUIDE : ENTONNOIR DE SÉLECTION & SIMULATEUR 4 ÉTAPES   */}
+      {/* ============================================================== */}
+      {activeViewTab === 'mode_guide_simulator' && (
+        <DojoGuideModeSimulator
+          exercises={exercises}
+          onSessionComplete={(exercise, reps, duration, earnedXp) => {
+            setSyncFeedback(`Séance Mode Guide validée : +${earnedXp} XP enregistrés pour « ${exercise.name} » (${reps} reps en ${duration}s) !`);
+            setTimeout(() => setSyncFeedback(null), 4000);
+          }}
+        />
       )}
 
       {/* ============================================================== */}

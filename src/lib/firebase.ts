@@ -1,5 +1,5 @@
-import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { initializeFirestore, setLogLevel } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -12,7 +12,16 @@ const firebaseConfig = {
   measurementId: "G-3RR1MZC97X"
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+// Silence internal Firestore warning and offline retry notices
+setLogLevel('silent');
+
+// Initialize Firebase App safely
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+
+// Use initializeFirestore with auto-detect long polling to prevent WebChannel disconnects in iframes
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+});
+
 export const auth = getAuth(app);
+

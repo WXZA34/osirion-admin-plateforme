@@ -13,13 +13,9 @@ import {
   X,
   Droplets,
   Sun,
-  Umbrella,
-  CloudUpload
+  Umbrella
 } from 'lucide-react';
 import { StreetWorkoutSpot } from '../types/admin';
-import { INITIAL_SPOTS } from '../data/mockData';
-import { db } from '../lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
 
 interface StreetWorkoutSpotsManagerProps {
   spots: StreetWorkoutSpot[];
@@ -49,31 +45,13 @@ export const StreetWorkoutSpotsManager: React.FC<StreetWorkoutSpotsManagerProps>
   const [equipmentInput, setEquipmentInput] = useState('Barres de traction, Dips, Monkey bar');
   const [hasWaterPoint, setHasWaterPoint] = useState(true);
   const [hasNightLighting, setHasNightLighting] = useState(true);
-  
-  const [isDeploying, setIsDeploying] = useState(false);
-
-  const handleDeploySpots = async () => {
-    if (!window.confirm("Voulez-vous vraiment déployer tous les spots (bastions) par défaut vers Firestore ?")) return;
-    
-    setIsDeploying(true);
-    try {
-      for (const spot of INITIAL_SPOTS) {
-        await setDoc(doc(db, 'bastions', spot.id), spot);
-      }
-      alert('Déploiement terminé avec succès !');
-    } catch (e) {
-      console.error("Erreur lors du déploiement :", e);
-      alert('Erreur lors du déploiement.');
-    } finally {
-      setIsDeploying(false);
-    }
-  };
 
   const filteredSpots = spots.filter((s) => {
+    const q = (searchCity || '').toLowerCase();
     const matchesSearch =
-      s.name.toLowerCase().includes(searchCity.toLowerCase()) ||
-      s.city.toLowerCase().includes(searchCity.toLowerCase()) ||
-      s.address.toLowerCase().includes(searchCity.toLowerCase());
+      (s.name || '').toLowerCase().includes(q) ||
+      (s.city || '').toLowerCase().includes(q) ||
+      (s.address || '').toLowerCase().includes(q);
     const matchesGround = selectedGround === 'ALL' || s.groundType === selectedGround;
     return matchesSearch && matchesGround;
   });
@@ -125,23 +103,13 @@ export const StreetWorkoutSpotsManager: React.FC<StreetWorkoutSpotsManagerProps>
         </div>
 
         {userRole === 'superadmin' && (
-          <div className="flex gap-2">
-            <button
-              onClick={handleDeploySpots}
-              disabled={isDeploying}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-semibold transition shrink-0"
-            >
-              <CloudUpload className="w-4 h-4" />
-              <span>{isDeploying ? 'Déploiement...' : 'Déployer Firestore'}</span>
-            </button>
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Ajouter un spot</span>
-            </button>
-          </div>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Ajouter un spot</span>
+          </button>
         )}
       </div>
 
@@ -176,9 +144,9 @@ export const StreetWorkoutSpotsManager: React.FC<StreetWorkoutSpotsManagerProps>
         {filteredSpots.map((spot) => (
           <div
             key={spot.id}
-            className="bg-white rounded-2xl border border-slate-200/80 shadow-sm hover:shadow transition flex flex-col overflow-hidden"
+            className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-sm hover:shadow transition space-y-4 flex flex-col justify-between"
           >
-            <div className="p-5 space-y-3 flex-1">
+            <div className="space-y-3">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <span className="text-[10px] font-semibold text-purple-600 uppercase tracking-wider block">
@@ -233,29 +201,8 @@ export const StreetWorkoutSpotsManager: React.FC<StreetWorkoutSpotsManagerProps>
               </div>
             </div>
 
-            {/* Photos (Intel from Eclaireurs) */}
-            {(spot.images && spot.images.length > 0) && (
-              <div className="px-5 pb-3">
-                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5 flex items-center gap-1">
-                  <Camera className="w-3 h-3" />
-                  Photos des éclaireurs
-                </span>
-                <div className="flex gap-2 overflow-x-auto hide-scrollbar snap-x pb-1">
-                  {spot.images.map((img, i) => (
-                    <a key={i} href={img} target="_blank" rel="noreferrer" className="shrink-0 snap-start">
-                      <img
-                        src={img}
-                        alt="Spot"
-                        className="w-16 h-12 object-cover rounded-lg border border-slate-200 shadow-sm"
-                      />
-                    </a>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {/* Bottom Actions */}
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs px-5 pb-5">
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
               <a
                 href={`https://www.google.com/maps/search/?api=1&query=${spot.latitude},${spot.longitude}`}
                 target="_blank"

@@ -5,9 +5,283 @@ import {
   SealedHonorContract,
 } from '../types/library';
 
-import { INITIAL_LIBRARY_BOOKS as IMPORTED_BOOKS } from './converted_books';
+// 1. CATALOGUE OFFICIEL DES LIVRES & TRAITÉS DE SAGESSE OSIRION
+export const INITIAL_LIBRARY_BOOKS: LibraryBook[] = [
+  // --- Winter Arc (Stoïcisme & Résilience Intérieure) ---
+  {
+    id: 'b_aurele',
+    title: 'Pensées pour moi-même',
+    author: 'Marc Aurèle',
+    tag: 'Obstacle & Résilience',
+    theme: 'Stoïcisme Impérial & Maîtrise de Soi',
+    whyRead:
+      'L’empereur philosophe vous enseigne que l’obstacle sur le chemin devient le chemin lui-même. Indispensable pour forger un mental d’acier sous la barre.',
+    keyPhrase: 'Ce qui fait obstacle à l’action fait avancer l’action.',
+    arc: 'Winter Arc',
+    pdfPath: 'assets/books/aurele_pensees.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=400&q=80',
+    pageCount: 168,
+    estimatedReadTimeMin: 45,
+    status: 'PUBLISHED',
+    readCount: 1420,
+    favoriteCount: 382,
+    addedAt: '2026-08-15',
+    chaptersCount: 12,
+    wisdomXpReward: 150,
+  },
+  {
+    id: 'b_seneque_temps',
+    title: 'De la Brièveté de la vie',
+    author: 'Sénèque',
+    tag: 'Gestion du Temps & Priorités',
+    theme: 'Sagesse Stoïcienne & Rareté du Temps',
+    whyRead:
+      'La vie n’est pas courte : c’est nous qui en perdons une grande partie. Pour tout athlète qui prétend ne pas avoir le temps de s’entraîner.',
+    keyPhrase:
+      'Ce n’est pas que nous disposons de peu de temps, c’est plutôt que nous en perdons beaucoup.',
+    arc: 'Winter Arc',
+    pdfPath: 'assets/books/seneque_brievete.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=400&q=80',
+    pageCount: 96,
+    estimatedReadTimeMin: 30,
+    status: 'PUBLISHED',
+    readCount: 1190,
+    favoriteCount: 295,
+    addedAt: '2026-08-15',
+    chaptersCount: 8,
+    wisdomXpReward: 120,
+  },
+  {
+    id: 'b_seneque_ame',
+    title: 'De la Tranquillité de l’âme',
+    author: 'Sénèque',
+    tag: 'Sérénité & Antifragilité',
+    theme: 'Apaisement des Passions & Force Intérieure',
+    whyRead:
+      'Comment rester imperturbable face aux tempêtes de la vie et à la fatigue des séries répétées ? Un traité médical pour l’esprit.',
+    keyPhrase:
+      'Aucun vent n’est favorable à celui qui ne sait pas vers quel port il navigue.',
+    arc: 'Winter Arc',
+    pdfPath: 'assets/books/seneque_tranquillite.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1457369804613-52c61a468e7d?w=400&q=80',
+    pageCount: 112,
+    estimatedReadTimeMin: 35,
+    status: 'PUBLISHED',
+    readCount: 940,
+    favoriteCount: 210,
+    addedAt: '2026-08-20',
+    chaptersCount: 10,
+    wisdomXpReward: 130,
+  },
+  {
+    id: 'b_boece',
+    title: 'Consolation de Philosophie',
+    author: 'Boèce',
+    tag: 'Destin & Dignité',
+    theme: 'Épreuve & Triomphe de la Raison',
+    whyRead:
+      'Écrit en prison avant son exécution, Boèce transcende la tragédie en élevant son esprit au-dessus des fluctuations de la fortune.',
+    keyPhrase: 'Le seul vrai refuge de l’homme réside dans sa propre vertu.',
+    arc: 'Winter Arc',
+    pdfPath: 'assets/books/boece_consolation.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1476275466078-4007374efbbe?w=400&q=80',
+    pageCount: 144,
+    estimatedReadTimeMin: 40,
+    status: 'PUBLISHED',
+    readCount: 620,
+    favoriteCount: 145,
+    addedAt: '2026-08-25',
+    chaptersCount: 9,
+    wisdomXpReward: 140,
+  },
 
-export const INITIAL_LIBRARY_BOOKS: LibraryBook[] = IMPORTED_BOOKS;
+  // --- Summer Body (Habitudes, Psychologie Sociale & Discernement) ---
+  {
+    id: 'b_atomic',
+    title: 'Atomic Habits (Habitudes Atomiques)',
+    author: 'James Clear',
+    tag: 'Discipline & Micro-Progression',
+    theme: 'Architecture du Comportement & Répétition Quotidienne',
+    whyRead:
+      '1% de progrès chaque jour donne une transformation 37 fois supérieure en 1 an. La méthode absolue pour ne jamais rater un entraînement.',
+    keyPhrase:
+      'Vous ne vous élevez pas au niveau de vos objectifs, vous chutez au niveau de vos systèmes.',
+    arc: 'Summer Body',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=400&q=80',
+    pageCount: 280,
+    estimatedReadTimeMin: 60,
+    status: 'PUBLISHED',
+    readCount: 2150,
+    favoriteCount: 680,
+    addedAt: '2026-07-01',
+    chaptersCount: 20,
+    wisdomXpReward: 200,
+  },
+  {
+    id: 'b_le_bon',
+    title: 'Psychologie des Foules',
+    author: 'Gustave Le Bon',
+    tag: 'Psychologie & Dynamique Sociale',
+    theme: 'Leader de Clan & Conscience Collective',
+    whyRead:
+      'Comprendre les mécanismes qui animent les groupes humains pour fédérer un clan puissant et ne jamais céder à l’illusion du troupeau.',
+    keyPhrase: 'L’individu en foule est un grain de sable au milieu d’autres que le vent soulève à son gré.',
+    arc: 'Summer Body',
+    pdfPath: 'assets/books/le_bon_foules.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?w=400&q=80',
+    pageCount: 190,
+    estimatedReadTimeMin: 50,
+    status: 'PUBLISHED',
+    readCount: 810,
+    favoriteCount: 190,
+    addedAt: '2026-07-10',
+    chaptersCount: 14,
+    wisdomXpReward: 160,
+  },
+  {
+    id: 'b_schopenhauer',
+    title: 'L’Art d’avoir toujours raison',
+    author: 'Arthur Schopenhauer',
+    tag: 'Rhétorique & Dialectique',
+    theme: 'Débat d’Esprit & Stratagèmes',
+    whyRead:
+      '38 stratagèmes pour déjouer la mauvaise foi et affûter votre esprit critique comme une lame de rasoir.',
+    keyPhrase: 'La vérité est comme une torche qui éclaire sans brûler.',
+    arc: 'Summer Body',
+    pdfPath: 'assets/books/schopenhauer_raison.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1463320726281-696a485928c7?w=400&q=80',
+    pageCount: 120,
+    estimatedReadTimeMin: 30,
+    status: 'PUBLISHED',
+    readCount: 990,
+    favoriteCount: 240,
+    addedAt: '2026-07-15',
+    chaptersCount: 38,
+    wisdomXpReward: 130,
+  },
+  {
+    id: 'b_la_rochefoucauld',
+    title: 'Maximes et Réflexions Morales',
+    author: 'François de La Rochefoucauld',
+    tag: 'Lucidité & Vérité Humaine',
+    theme: 'Démystification de l’Amour-Propre',
+    whyRead:
+      'Une dissection chirurgicale des vanités humaines. Pour rester humble malgré vos records physiques.',
+    keyPhrase: 'Nos vertus ne sont, le plus souvent, que des vices déguisés.',
+    arc: 'Summer Body',
+    pdfPath: 'assets/books/rochefoucauld_maximes.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1495640388908-05fa85288e61?w=400&q=80',
+    pageCount: 104,
+    estimatedReadTimeMin: 25,
+    status: 'PUBLISHED',
+    readCount: 750,
+    favoriteCount: 180,
+    addedAt: '2026-07-20',
+    chaptersCount: 12,
+    wisdomXpReward: 110,
+  },
+
+  // --- Royal Arc (Stratégie Suprême, Conquête & Souveraineté) ---
+  {
+    id: 'b_art_of_war',
+    title: 'L’Art de la Guerre',
+    author: 'Sun Tzu',
+    tag: 'Stratégie Militaire & Duel',
+    theme: 'Victoire sans Combat & Maîtrise du Terrain',
+    whyRead:
+      'Le traité suprême de stratégie militaire appliquée au Colisée, à la conquête des Bastions et aux défis de la vie.',
+    keyPhrase:
+      'L’art suprême de la guerre, c’est de soumettre l’ennemi sans avoir à combattre.',
+    arc: 'Royal Arc',
+    pdfPath: 'assets/books/sun_tzu_art_de_la_guerre_.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=400&q=80',
+    pageCount: 156,
+    estimatedReadTimeMin: 45,
+    status: 'PUBLISHED',
+    readCount: 3120,
+    favoriteCount: 920,
+    addedAt: '2026-06-01',
+    chaptersCount: 13,
+    wisdomXpReward: 180,
+  },
+  {
+    id: 'b_machiavel',
+    title: 'Le Prince',
+    author: 'Nicolas Machiavel',
+    tag: 'Pouvoir & Réalisme Politique',
+    theme: 'Commandement de Faction & Gouvernance',
+    whyRead:
+      'La réalité nue du pouvoir et de la diplomatie. Comment préserver son clan des trahisons et inspirer le respect.',
+    keyPhrase:
+      'Il est plus sûr d’être craint que d’être aimé, si l’on ne peut être les deux.',
+    arc: 'Royal Arc',
+    pdfPath: 'assets/books/machiavel_le_prince.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1543002588-bfa74002ed7e?w=400&q=80',
+    pageCount: 172,
+    estimatedReadTimeMin: 50,
+    status: 'PUBLISHED',
+    readCount: 1840,
+    favoriteCount: 470,
+    addedAt: '2026-06-10',
+    chaptersCount: 26,
+    wisdomXpReward: 170,
+  },
+  {
+    id: 'b_musashi',
+    title: 'Le Traité des Cinq Roues (Gorin no Sho)',
+    author: 'Miyamoto Musashi',
+    tag: 'Voie du Guerrier & Épée',
+    theme: 'Pratique Implacable & Stratégie Totale',
+    whyRead:
+      'Rédigé par le samouraï invaincu en 61 duels à mort. La philosophie du geste parfait et du timing absolu.',
+    keyPhrase: 'Ne rien faire qui ne soit d’aucune utilité.',
+    arc: 'Royal Arc',
+    pdfPath: 'assets/books/musashi_cinq_roues.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1516962215378-7fa2e137ae93?w=400&q=80',
+    pageCount: 138,
+    estimatedReadTimeMin: 40,
+    status: 'PUBLISHED',
+    readCount: 2490,
+    favoriteCount: 780,
+    addedAt: '2026-06-15',
+    chaptersCount: 5,
+    wisdomXpReward: 190,
+  },
+  {
+    id: 'b_lao_tseu',
+    title: 'Tao Te King (Le Livre de la Voie et de la Vertu)',
+    author: 'Lao-Tseu',
+    tag: 'Harmonie & Non-Agir',
+    theme: 'Puissance sans Effort & Fluidité de l’Eau',
+    whyRead:
+      'L’eau vainc le roc par sa flexibilité. Découvrez le principe du Wu Wei pour bouger sans tension et décupler votre puissance.',
+    keyPhrase:
+      'Le voyage de mille lieues commence toujours par un premier pas.',
+    arc: 'Royal Arc',
+    pdfPath: 'assets/books/lao_tseu_tao.pdf',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=400&q=80',
+    pageCount: 110,
+    estimatedReadTimeMin: 35,
+    status: 'PUBLISHED',
+    readCount: 1350,
+    favoriteCount: 410,
+    addedAt: '2026-06-20',
+    chaptersCount: 81,
+    wisdomXpReward: 160,
+  },
+];
 
 // 2. CAPSULES AUDIO & PODCASTS OFFICIELS OSIRION
 export const INITIAL_LIBRARY_AUDIOS: LibraryAudio[] = [

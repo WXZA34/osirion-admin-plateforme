@@ -12,13 +12,9 @@ import {
   Unlock,
   BookOpen,
   ArrowRight,
-  TrendingUp,
-  CloudUpload
+  TrendingUp
 } from 'lucide-react';
 import { WorkoutProgram, AthleteLevel } from '../types/admin';
-import { INITIAL_PROGRAMS } from '../data/mockData';
-import { db } from '../lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
 
 interface WorkoutProgramsManagerProps {
   programs: WorkoutProgram[];
@@ -42,25 +38,6 @@ export const WorkoutProgramsManager: React.FC<WorkoutProgramsManagerProps> = ({
   const [sessionsPerWeek, setSessionsPerWeek] = useState(3);
   const [isPremiumOnly, setIsPremiumOnly] = useState(false);
   const [exercisesList, setExercisesList] = useState('Pompes, Tractions, Dips, Gainage Planche');
-  
-  const [isDeploying, setIsDeploying] = useState(false);
-
-  const handleDeployPrograms = async () => {
-    if (!window.confirm("Voulez-vous vraiment déployer tous les programmes d'entraînement par défaut vers Firestore ?")) return;
-    
-    setIsDeploying(true);
-    try {
-      for (const prog of INITIAL_PROGRAMS) {
-        await setDoc(doc(db, 'programs', prog.id), prog);
-      }
-      alert('Déploiement terminé avec succès !');
-    } catch (e) {
-      console.error("Erreur lors du déploiement :", e);
-      alert('Erreur lors du déploiement.');
-    } finally {
-      setIsDeploying(false);
-    }
-  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,23 +86,13 @@ export const WorkoutProgramsManager: React.FC<WorkoutProgramsManagerProps> = ({
         </div>
 
         {userRole === 'superadmin' && (
-          <div className="flex gap-2">
-            <button
-              onClick={handleDeployPrograms}
-              disabled={isDeploying}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold transition shrink-0"
-            >
-              <CloudUpload className="w-4 h-4" />
-              <span>{isDeploying ? 'Déploiement...' : 'Déployer Firestore'}</span>
-            </button>
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Créer un programme</span>
-            </button>
-          </div>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Créer un programme</span>
+          </button>
         )}
       </div>
 

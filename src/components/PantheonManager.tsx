@@ -55,7 +55,6 @@ export type PantheonSortType = 'xp' | 'forceXp' | 'wisdomXp' | 'clans';
 
 interface PantheonManagerProps {
   athletes: AthleteUser[];
-  clans?: Clan[];
   userRole?: 'superadmin' | 'auditor';
   onUpdateAthlete?: (updated: AthleteUser) => void;
   onSendPushNotification?: (title: string, body: string) => void;
@@ -63,7 +62,6 @@ interface PantheonManagerProps {
 
 export const PantheonManager: React.FC<PantheonManagerProps> = ({
   athletes,
-  clans = [],
   userRole = 'superadmin',
   onUpdateAthlete,
   onSendPushNotification,
@@ -77,19 +75,12 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
   const [currentSortBy, setCurrentSortBy] = useState<PantheonSortType>('xp');
   const [scopeFilter, setScopeFilter] = useState<'GLOBAL' | 'FRANCE' | 'PARIS' | 'LYON' | 'MARSEILLE'>('GLOBAL');
 
-  // Datasets
-  const [records, setRecords] = useState<PantheonRecord[]>(INITIAL_PANTHEON_RECORDS);
+  // Datasets Réels
+  const [records, setRecords] = useState<PantheonRecord[]>([]);
   const [titles, setTitles] = useState<PantheonTitle[]>(INITIAL_PANTHEON_TITLES);
   const [halos, setHalos] = useState<PantheonHalo[]>(INITIAL_PANTHEON_HALOS);
-  const [clansList, setClansList] = useState<Clan[]>(clans.length > 0 ? clans : INITIAL_PANTHEON_CLANS);
-  const [seasons] = useState<PantheonSeasonArchive[]>(INITIAL_PANTHEON_SEASONS);
-
-  // Sync clans from props if they load later
-  React.useEffect(() => {
-    if (clans && clans.length > 0) {
-      setClansList(clans);
-    }
-  }, [clans]);
+  const [clansList, setClansList] = useState<Clan[]>([]);
+  const [seasons] = useState<PantheonSeasonArchive[]>([]);
 
   // Searches
   const [clanSearchQuery, setClanSearchQuery] = useState('');
@@ -137,9 +128,10 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
   const filteredAthletesByScope = athletes.filter((a) => {
     if (scopeFilter === 'GLOBAL') return true;
     if (scopeFilter === 'FRANCE') return true; // Tous nos mock sont basés en France
-    if (scopeFilter === 'PARIS') return a.city.toLowerCase().includes('paris');
-    if (scopeFilter === 'LYON') return a.city.toLowerCase().includes('lyon');
-    if (scopeFilter === 'MARSEILLE') return a.city.toLowerCase().includes('marseille');
+    const cityLower = (a.city || '').toLowerCase();
+    if (scopeFilter === 'PARIS') return cityLower.includes('paris');
+    if (scopeFilter === 'LYON') return cityLower.includes('lyon');
+    if (scopeFilter === 'MARSEILLE') return cityLower.includes('marseille');
     return true;
   });
 
@@ -158,12 +150,13 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
   });
 
   // 3. Tri et filtrage pour le 4ème classement : Factions (Top Clans)
+  const clanQ = (clanSearchQuery || '').toLowerCase();
   const sortedClans = [...clansList]
     .filter(
       (c) =>
-        c.name.toLowerCase().includes(clanSearchQuery.toLowerCase()) ||
-        c.leaderPseudo.toLowerCase().includes(clanSearchQuery.toLowerCase()) ||
-        c.description.toLowerCase().includes(clanSearchQuery.toLowerCase())
+        (c.name || '').toLowerCase().includes(clanQ) ||
+        (c.leaderPseudo || '').toLowerCase().includes(clanQ) ||
+        (c.description || '').toLowerCase().includes(clanQ)
     )
     .sort((a, b) => b.totalXp - a.totalXp);
 
@@ -856,9 +849,13 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
                     <tbody className="divide-y divide-slate-100">
                       {sortedAthletes
                         .filter(
-                          (a) =>
-                            a.fullName.toLowerCase().includes(athleteSearchQuery.toLowerCase()) ||
-                            a.username.toLowerCase().includes(athleteSearchQuery.toLowerCase())
+                          (a) => {
+                            const q = (athleteSearchQuery || '').toLowerCase();
+                            return (
+                              (a.fullName || '').toLowerCase().includes(q) ||
+                              (a.username || '').toLowerCase().includes(q)
+                            );
+                          }
                         )
                         .map((athlete, idx) => {
                           const totalDual = (athlete.forceXp || 0) + (athlete.wisdomXp || 0) || 1;

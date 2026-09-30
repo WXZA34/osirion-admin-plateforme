@@ -17,9 +17,10 @@ interface ClansManagerProps {
 export const ClansManager: React.FC<ClansManagerProps> = ({ clans }) => {
   const [searchTerm, setSearchTerm] = useState('');
 
+  const q = (searchTerm || '').toLowerCase();
   const filteredClans = clans.filter((c) =>
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.leaderPseudo.toLowerCase().includes(searchTerm.toLowerCase())
+    (c.name || '').toLowerCase().includes(q) ||
+    (c.leaderPseudo || '').toLowerCase().includes(q)
   );
 
   return (

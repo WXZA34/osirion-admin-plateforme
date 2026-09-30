@@ -2,7 +2,7 @@
 
 export type SubscriptionTier = 'FREE' | 'PRO_MONTHLY' | 'ATHLETE_ANNUAL';
 export type SubscriptionStatus = 'ACTIVE' | 'TRIALING' | 'CANCELED' | 'PAST_DUE';
-export type AthleteLevel = 'Débutant' | 'Intermédiaire' | 'Avancé' | 'Élite';
+export type AthleteLevel = 'Débutant' | 'Initié' | 'Intermédiaire' | 'Avancé' | 'Élite';
 
 export interface AthleteUser {
   id: string;
@@ -136,6 +136,7 @@ export interface ExerciseItem {
 
   // --- Paramètres d'arbitrage IA du Dojo (Google ML Kit Pose Detection) ---
   aiPoseDetection: boolean;
+  hasAiSupport?: boolean; // Compatibilité Flutter (si false, filtré hors du Mode Vision)
   minAngle: number; // Angle flexion articulation (ex: 85° pour coudes pushups)
   maxAngle: number; // Extension complète (ex: 170°)
   sensitivity: number; // Tolérance angulaire (0.1 à 1.0)
@@ -153,6 +154,9 @@ export interface ExerciseItem {
   videoDemoUrl: string;
   popularityRank: number;
   activeInWorkouts: boolean;
+  requiredCameraAngle?: 'profile' | 'face';
+  xpRewardPerUnit?: number;
+  unit?: 'reps' | 'seconds';
 }
 
 export interface WorkoutProgram {
@@ -190,7 +194,6 @@ export interface StreetWorkoutSpot {
   isCovered: boolean;
   hasWaterPoint: boolean;
   hasNightLighting: boolean;
-  images?: string[];
 }
 
 export interface PushNotificationCampaign {
