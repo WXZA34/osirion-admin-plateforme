@@ -40,7 +40,7 @@ service cloud.firestore {
     match /users/{document=**} { allow read, write: if true; }
     match /exercises/{document=**} { allow read, write: if true; }
     match /bastions/{document=**} { allow read, write: if true; }
-    match /library_books/{document=**} { allow read, write: if true; }
+    match /books/{document=**} { allow read, write: if true; }
     match /library_audios/{document=**} { allow read, write: if true; }
 
     // Indispensable pour la Transmission du Jour :

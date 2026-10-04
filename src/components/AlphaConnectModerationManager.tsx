@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AthleteUser } from '../types/admin';
 import {
   ConnectMessageItem,
@@ -72,6 +72,46 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
 
   // Datasets
   const [reports, setReports] = useState<UserReport[]>(INITIAL_USER_REPORTS);
+
+  useEffect(() => {
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ collection, onSnapshot, query, orderBy }) => {
+        const q = query(collection(db, 'reports'), orderBy('createdAt', 'desc'));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+          const fetchedReports: UserReport[] = snapshot.docs.map(doc => {
+            const data = doc.data();
+            // Convert to Admin Dashboard Format
+            return {
+              id: doc.id,
+              reportedUserId: data.reportedId || '',
+              reportedUsername: data.reportedName || 'Inconnu',
+              reportedFullName: data.reportedName || '',
+              reporterUserId: data.reporterId || '',
+              reporterUsername: data.reporterId || 'Inconnu',
+              reason: 'UNSPORTING', // Default mapped
+              reasonLabel: data.reason || 'Autre',
+              severity: 'MEDIUM',
+              status: data.status === 'treated' ? 'RESOLVED_WARNING' : 'PENDING',
+              contextChannel: data.reportedType === 'CLAN' ? 'Clan' : 'Joueur',
+              description: data.description || '',
+              evidenceList: data.proofUrl ? [{
+                id: doc.id,
+                title: 'Preuve Utilisateur',
+                type: 'SCREENSHOT',
+                url: data.proofUrl,
+                description: 'Preuve fournie par l\'utilisateur',
+                capturedAt: data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleString() : ''
+              }] : [],
+              createdAt: data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleString() : '',
+              updatedAt: data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleString() : ''
+            };
+          });
+          setReports(fetchedReports);
+        });
+        return () => unsubscribe();
+      });
+    });
+  }, []);
   const [sanctions, setSanctions] = useState<UserSanction[]>(INITIAL_USER_SANCTIONS);
   const [adminTransmissions, setAdminTransmissions] = useState<AdminTransmission[]>(INITIAL_ADMIN_TRANSMISSIONS);
   const [evidenceStore, setEvidenceStore] = useState<ModerationEvidence[]>(INITIAL_EVIDENCE_STORE);
@@ -121,6 +161,14 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
 
   // Actions Modération
   const handleResolveReport = (reportId: string, resolution: 'RESOLVED_WARNING' | 'RESOLVED_BAN' | 'DISMISSED') => {
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ doc, updateDoc }) => {
+        updateDoc(doc(db, 'reports', reportId), {
+          status: 'treated'
+        }).catch(err => console.error('Error updating report', err));
+      });
+    });
+
     setReports((prev) =>
       prev.map((r) =>
         r.id === reportId
@@ -174,16 +222,27 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
 
     setSanctions([newSanctionItem, ...sanctions]);
 
-    // Mettre à jour l'utilisateur si banni
-    if (effectiveSanctionType === 'PERMANENT_BAN' || effectiveSanctionType.includes('BAN')) {
-      const updatedAthlete: AthleteUser = {
-        ...athlete,
-        status: 'SUSPENDED',
-      };
-      if (onUpdateAthlete) {
-        onUpdateAthlete(updatedAthlete);
-      }
-    }
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ doc, updateDoc, setDoc }) => {
+        // Enregistrer la sanction
+        setDoc(doc(db, 'sanctions', newSanctionItem.id), newSanctionItem).catch(console.error);
+
+        // Mettre à jour l'utilisateur si banni
+        if (effectiveSanctionType === 'PERMANENT_BAN' || effectiveSanctionType.includes('BAN')) {
+          updateDoc(doc(db, 'users', athlete.id), {
+            status: 'SUSPENDED'
+          }).catch(console.error);
+
+          const updatedAthlete: AthleteUser = {
+            ...athlete,
+            status: 'SUSPENDED',
+          };
+          if (onUpdateAthlete) {
+            onUpdateAthlete(updatedAthlete);
+          }
+        }
+      });
+    });
 
     // Notifier via Push si configuré
     if (onSendPushNotification) {

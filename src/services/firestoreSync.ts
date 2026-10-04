@@ -121,7 +121,7 @@ export const FIRESTORE_RUBRIQUES: FirestoreRubriqueInfo[] = [
     id: 'library_books',
     name: 'Bibliothèque de Manuscrits (PDF)',
     category: 'Contenu & Entraînement',
-    firestorePath: 'library_books',
+    firestorePath: 'books',
     type: 'COLLECTION',
     description: 'Traités de Marc Aurèle, Épictète et manuels techniques de callisthénie',
     mobileMapping: 'lib/features/library/domain/entities/book.dart',
@@ -314,7 +314,7 @@ export async function seedRubrique(rubriqueId: string): Promise<{ success: boole
       case 'library_books': {
         const batch = writeBatch(db);
         for (const b of INITIAL_LIBRARY_BOOKS) {
-          batch.set(doc(db, 'library_books', b.id), b, { merge: true });
+          batch.set(doc(db, 'books', b.id), b, { merge: true });
         }
         await batch.commit();
         return { success: true, count: INITIAL_LIBRARY_BOOKS.length };

@@ -5,6 +5,8 @@ import {
   collection,
   doc,
   setDoc,
+  updateDoc,
+  deleteDoc,
   onSnapshot,
   writeBatch,
   getDocs,
@@ -97,7 +99,7 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
     let unsubAudios: (() => void) | undefined;
 
     try {
-      unsubBooks = onSnapshot(collection(db, 'library_books'), (snapshot) => {
+      unsubBooks = onSnapshot(collection(db, 'books'), (snapshot) => {
         if (!snapshot.empty) {
           const list: LibraryBook[] = [];
           snapshot.forEach((d) => list.push(d.data() as LibraryBook));
@@ -127,11 +129,11 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
   const handleSyncWithFirestore = async () => {
     setIsSyncing(true);
     try {
-      const snapBooks = await getDocs(collection(db, 'library_books'));
+      const snapBooks = await getDocs(collection(db, 'books'));
       if (snapBooks.empty) {
         const batch = writeBatch(db);
         for (const b of INITIAL_LIBRARY_BOOKS) {
-          batch.set(doc(db, 'library_books', b.id), b, { merge: true });
+          batch.set(doc(db, 'books', b.id), b, { merge: true });
         }
         for (const a of INITIAL_LIBRARY_AUDIOS) {
           batch.set(doc(db, 'library_audios', a.id), a, { merge: true });
@@ -237,30 +239,29 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
   });
 
   // Handlers for Books
-  const handleToggleBookStatus = (bookId: string) => {
-    setBooks((prev) =>
-      prev.map((b) => {
-        if (b.id === bookId) {
-          const nextStatus: BookStatus = b.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
-          return { ...b, status: nextStatus };
-        }
-        return b;
-      })
-    );
-    showToast('Statut du livre mis à jour (synchronisé avec l’application mobile).');
+  const handleToggleBookStatus = async (bookId: string) => {
+    const book = books.find(b => b.id === bookId);
+    if (!book) return;
+    const nextStatus: BookStatus = book.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
+    try {
+      await setDoc(doc(db, 'books', bookId), { status: nextStatus }, { merge: true });
+      showToast('Statut du livre mis à jour (synchronisé avec l’application mobile).');
+    } catch(err) { console.error(err); showToast('Erreur de mise à jour'); }
   };
 
-  const handleConfirmDeleteBook = () => {
+  const handleConfirmDeleteBook = async () => {
     if (!bookToDelete) return;
-    setBooks((prev) => prev.filter((b) => b.id !== bookToDelete.id));
-    if (selectedBook && selectedBook.id === bookToDelete.id) {
-      setSelectedBook(null);
-    }
-    showToast(`Le livre « ${bookToDelete.title} » a été retiré de la Bibliothèque.`);
-    setBookToDelete(null);
+    try {
+      await deleteDoc(doc(db, 'books', bookToDelete.id));
+      if (selectedBook && selectedBook.id === bookToDelete.id) {
+        setSelectedBook(null);
+      }
+      showToast(`Le livre « ${bookToDelete.title} » a été retiré de la Bibliothèque.`);
+      setBookToDelete(null);
+    } catch(err) { console.error(err); showToast('Erreur de suppression'); }
   };
 
-  const handleFinishAddBookWizard = (e: React.FormEvent) => {
+  const handleFinishAddBookWizard = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBookTitle.trim() || !newBookAuthor.trim()) return;
 
@@ -288,17 +289,19 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
       chaptersCount: 10,
     };
 
-    setBooks([newBook, ...books]);
-    setShowAddBookWizard(false);
-    resetBookWizard();
-    showToast(`Le traité « ${newBook.title} » a été validé et intégré à la Bibliothèque !`);
+    try {
+      await setDoc(doc(db, 'books', newBook.id), newBook);
+      setShowAddBookWizard(false);
+      resetBookWizard();
+      showToast(`Le traité « ${newBook.title} » a été validé et intégré à la Bibliothèque !`);
 
-    if (onSendPushNotification) {
-      onSendPushNotification(
-        `📚 Nouveau Chef-d’œuvre dans la Bibliothèque : ${newBook.title}`,
-        `Écrit par ${newBook.author}. Disponible pour votre prochaine session de lecture stoïcienne (+${newBook.wisdomXpReward} XP Sagesse).`
-      );
-    }
+      if (onSendPushNotification) {
+        onSendPushNotification(
+          `📚 Nouveau Chef-d’œuvre dans la Bibliothèque : ${newBook.title}`,
+          `Écrit par ${newBook.author}. Disponible pour votre prochaine session de lecture stoïcienne (+${newBook.wisdomXpReward} XP Sagesse).`
+        );
+      }
+    } catch(err) { console.error(err); showToast('Erreur lors de l’ajout'); }
   };
 
   const resetBookWizard = () => {
@@ -318,30 +321,29 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
   };
 
   // Handlers for Audios
-  const handleToggleAudioStatus = (audioId: string) => {
-    setAudios((prev) =>
-      prev.map((a) => {
-        if (a.id === audioId) {
-          const nextStatus: AudioStatus = a.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
-          return { ...a, status: nextStatus };
-        }
-        return a;
-      })
-    );
-    showToast('Statut de la capsule audio mis à jour.');
+  const handleToggleAudioStatus = async (audioId: string) => {
+    const audio = audios.find(a => a.id === audioId);
+    if (!audio) return;
+    const nextStatus: AudioStatus = audio.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
+    try {
+      await setDoc(doc(db, 'library_audios', audioId), { status: nextStatus }, { merge: true });
+      showToast('Statut de la capsule audio mis à jour.');
+    } catch(err) { console.error(err); showToast('Erreur de mise à jour'); }
   };
 
-  const handleConfirmDeleteAudio = () => {
+  const handleConfirmDeleteAudio = async () => {
     if (!audioToDelete) return;
-    setAudios((prev) => prev.filter((a) => a.id !== audioToDelete.id));
-    if (selectedAudio && selectedAudio.id === audioToDelete.id) {
-      setSelectedAudio(null);
-    }
-    showToast(`La capsule audio « ${audioToDelete.title} » a été retirée du catalogue.`);
-    setAudioToDelete(null);
+    try {
+      await deleteDoc(doc(db, 'library_audios', audioToDelete.id));
+      if (selectedAudio && selectedAudio.id === audioToDelete.id) {
+        setSelectedAudio(null);
+      }
+      showToast(`La capsule audio « ${audioToDelete.title} » a été retirée du catalogue.`);
+      setAudioToDelete(null);
+    } catch(err) { console.error(err); showToast('Erreur de suppression'); }
   };
 
-  const handleFinishAddAudioWizard = (e: React.FormEvent) => {
+  const handleFinishAddAudioWizard = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAudioTitle.trim() || !newAudioUrl.trim()) return;
 
@@ -364,17 +366,19 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
       fileSizeBytes: 12000000,
     };
 
-    setAudios([newAudio, ...audios]);
-    setShowAddAudioWizard(false);
-    resetAudioWizard();
-    showToast(`La capsule audio « ${newAudio.title} » a été publiée avec succès !`);
+    try {
+      await setDoc(doc(db, 'library_audios', newAudio.id), newAudio);
+      setShowAddAudioWizard(false);
+      resetAudioWizard();
+      showToast(`La capsule audio « ${newAudio.title} » a été publiée avec succès !`);
 
-    if (onSendPushNotification) {
-      onSendPushNotification(
-        `🎙️ Nouvelle Capsule Audio : ${newAudio.title}`,
-        `${newAudio.subtitle}. Écoutez-la pendant vos temps de repos ou votre échauffement !`
-      );
-    }
+      if (onSendPushNotification) {
+        onSendPushNotification(
+          `🎙️ Nouvelle Capsule Audio : ${newAudio.title}`,
+          `${newAudio.subtitle}. Écoutez-la pendant vos temps de repos ou votre échauffement !`
+        );
+      }
+    } catch(err) { console.error(err); showToast('Erreur lors de l’ajout'); }
   };
 
   const resetAudioWizard = () => {
@@ -658,7 +662,7 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center bg-slate-800 text-amber-400 font-bold text-xs p-1 text-center">
-                          {book.title.slice(0, 8)}
+                          {book.title ? book.title.slice(0, 8) : 'Livre'}
                         </div>
                       )}
                       <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-xs text-[9px] text-white text-center py-0.5 font-mono">

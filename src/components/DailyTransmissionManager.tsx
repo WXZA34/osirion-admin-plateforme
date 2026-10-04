@@ -594,7 +594,8 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
 
     // Synchronisation Firestore de la réponse
     try {
-      setDoc(doc(db, 'daily_transmissions', currentViewedTransmission.id), {
+      const updatedTransmission = {
+        ...currentViewedTransmission,
         commentSession: {
           ...currentViewedTransmission.commentSession,
           comments: (currentViewedTransmission.commentSession?.comments || []).map((c) =>
@@ -612,7 +613,8 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
               : c
           ),
         },
-      }, { merge: true }).catch(() => {});
+      };
+      setDoc(doc(db, 'daily_transmissions', currentViewedTransmission.id), updatedTransmission).catch(() => {});
     } catch {
       // Mode hors-ligne pris en charge
     }
@@ -865,7 +867,7 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
                     {isInlinePlaying ? (
                       (() => {
                         const cfg = parseVideoUrl(currentViewedTransmission.videoUrl, true);
-                        if (cfg.type === 'youtube' || cfg.type === 'vimeo') {
+                        if (cfg.type === 'youtube' || cfg.type === 'vimeo' || cfg.type === 'tiktok') {
                           return (
                             <iframe
                               src={cfg.embedUrl}
@@ -1154,7 +1156,7 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
                         </button>
                       </div>
                       <p className="text-[11px] text-slate-400">
-                        Formats supportés : <code>youtu.be/...</code>, <code>youtube.com/watch?v=...</code>, <code>youtube.com/shorts/...</code>, Vimeo ou liens directs <code>.mp4</code>.
+                        Formats supportés : <code>youtu.be/...</code>, <code>youtube.com/watch?v=...</code>, <code>tiktok.com/...</code>, Vimeo ou liens directs <code>.mp4</code>.
                       </p>
                     </div>
                   ) : (
@@ -1285,7 +1287,7 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
                           const cfg = parseVideoUrl(currentViewedTransmission.videoUrl);
                           return (
                             <div className="relative w-full h-full">
-                              {cfg.type === 'youtube' || cfg.type === 'vimeo' ? (
+                              {cfg.type === 'youtube' || cfg.type === 'vimeo' || cfg.type === 'tiktok' ? (
                                 <iframe
                                   src={cfg.embedUrl}
                                   title="Aperçu mobile"

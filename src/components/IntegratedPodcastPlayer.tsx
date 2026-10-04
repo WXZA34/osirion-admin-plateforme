@@ -63,7 +63,7 @@ export const IntegratedPodcastPlayer: React.FC<IntegratedPodcastPlayerProps> = (
     ],
   };
 
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(audio.durationSeconds || 600);
   const [volume, setVolume] = useState(0.85);
@@ -73,102 +73,45 @@ export const IntegratedPodcastPlayer: React.FC<IntegratedPodcastPlayerProps> = (
   const [activeTab, setActiveTab] = useState<'player' | 'transcript'>('player');
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Synthesized speech narration engine
   useEffect(() => {
-    let utterance: SpeechSynthesisUtterance | null = null;
-
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-
-      const fullTranscript = episode.sections
-        .map((s) => `${s.heading}. ${s.speech}`)
-        .join(' ');
-
-      utterance = new SpeechSynthesisUtterance(fullTranscript);
-      utterance.lang = 'fr-FR';
-      utterance.rate = playbackRate;
-      utterance.volume = isMuted ? 0 : volume;
-
-      utterance.onend = () => {
-        setIsPlaying(false);
-      };
-      utterance.onerror = () => {
-        setIsPlaying(false);
-      };
-
+    if (audioRef.current) {
       if (isPlaying) {
-        window.speechSynthesis.speak(utterance);
-      }
-    }
-
-    return () => {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
-    };
-  }, [audio.id]);
-
-  // Sync speech state with play/pause
-  useEffect(() => {
-    if ('speechSynthesis' in window) {
-      if (isPlaying) {
-        if (window.speechSynthesis.paused) {
-          window.speechSynthesis.resume();
-        } else if (!window.speechSynthesis.speaking) {
-          const fullTranscript = episode.sections
-            .map((s) => `${s.heading}. ${s.speech}`)
-            .join(' ');
-          const utterance = new SpeechSynthesisUtterance(fullTranscript);
-          utterance.lang = 'fr-FR';
-          utterance.rate = playbackRate;
-          utterance.volume = isMuted ? 0 : volume;
-          window.speechSynthesis.speak(utterance);
-        }
+        audioRef.current.play().catch(e => console.log("Audio play prevented:", e));
       } else {
-        window.speechSynthesis.pause();
+        audioRef.current.pause();
       }
     }
   }, [isPlaying]);
 
-  // Speed rate updater
   useEffect(() => {
-    if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
-      const fullTranscript = episode.sections
-        .map((s) => `${s.heading}. ${s.speech}`)
-        .join(' ');
-      const utterance = new SpeechSynthesisUtterance(fullTranscript);
-      utterance.lang = 'fr-FR';
-      utterance.rate = playbackRate;
-      utterance.volume = isMuted ? 0 : volume;
-      if (isPlaying) {
-        window.speechSynthesis.speak(utterance);
-      }
+    if (audioRef.current) {
+      audioRef.current.volume = isMuted ? 0 : volume;
+    }
+  }, [volume, isMuted]);
+
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.playbackRate = playbackRate;
     }
   }, [playbackRate]);
 
-  // Timeline progress simulation
-  useEffect(() => {
-    if (isPlaying) {
-      timerRef.current = setInterval(() => {
-        setCurrentTime((prev) => {
-          if (prev >= duration) {
-            setIsPlaying(false);
-            return duration;
-          }
-          return prev + 1;
-        });
-      }, 1000 / playbackRate);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
+  const handleTimeUpdate = () => {
+    if (audioRef.current) {
+      setCurrentTime(audioRef.current.currentTime);
     }
+  };
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isPlaying, duration, playbackRate]);
+  const handleLoadedMetadata = () => {
+    if (audioRef.current) {
+      setDuration(audioRef.current.duration);
+    }
+  };
+
+  const handleEnded = () => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+  };
 
   const togglePlay = () => {
     setIsPlaying(!isPlaying);
@@ -176,10 +119,17 @@ export const IntegratedPodcastPlayer: React.FC<IntegratedPodcastPlayerProps> = (
 
   const handleSeek = (newTime: number) => {
     setCurrentTime(newTime);
+    if (audioRef.current) {
+      audioRef.current.currentTime = newTime;
+    }
   };
 
   const handleSkip = (seconds: number) => {
-    setCurrentTime((prev) => Math.max(0, Math.min(duration, prev + seconds)));
+    if (audioRef.current) {
+      const newTime = Math.max(0, Math.min(duration, audioRef.current.currentTime + seconds));
+      audioRef.current.currentTime = newTime;
+      setCurrentTime(newTime);
+    }
   };
 
   const formatSeconds = (sec: number) => {
@@ -201,6 +151,14 @@ export const IntegratedPodcastPlayer: React.FC<IntegratedPodcastPlayerProps> = (
           isExpanded ? 'w-full max-w-2xl max-h-[90vh]' : 'w-full'
         }`}
       >
+        <audio
+          ref={audioRef}
+          src={audio.audioUrl?.startsWith('http') ? audio.audioUrl : `/${audio.audioUrl?.replace(/^\/?/, '')}`}
+          onTimeUpdate={handleTimeUpdate}
+          onLoadedMetadata={handleLoadedMetadata}
+          onEnded={handleEnded}
+          preload="metadata"
+        />
         {/* PLAYER HEADER */}
         <div className="px-4 py-3 bg-slate-950/60 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -225,8 +183,8 @@ export const IntegratedPodcastPlayer: React.FC<IntegratedPodcastPlayerProps> = (
             </button>
             <button
               onClick={() => {
-                if ('speechSynthesis' in window) {
-                  window.speechSynthesis.cancel();
+                if (audioRef.current) {
+                  audioRef.current.pause();
                 }
                 onClose();
               }}
@@ -377,7 +335,8 @@ export const IntegratedPodcastPlayer: React.FC<IntegratedPodcastPlayerProps> = (
 
               <button
                 onClick={togglePlay}
-                className="w-10 h-10 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center justify-center font-bold shadow-lg shadow-amber-500/20 transition transform active:scale-95"
+                disabled={!audio.audioUrl}
+                className="w-10 h-10 rounded-2xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 flex items-center justify-center font-bold shadow-lg shadow-amber-500/20 transition transform active:scale-95"
               >
                 {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
               </button>

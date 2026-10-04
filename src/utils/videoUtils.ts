@@ -3,7 +3,7 @@
  */
 
 export interface VideoPlayerConfig {
-  type: 'youtube' | 'direct' | 'vimeo' | 'unsupported';
+  type: 'youtube' | 'direct' | 'vimeo' | 'tiktok' | 'unsupported';
   embedUrl: string;
   thumbnailUrl?: string;
   videoId?: string;
@@ -50,6 +50,16 @@ export function parseVideoUrl(url: string, autoPlay: boolean = false): VideoPlay
       type: 'vimeo',
       videoId: vimeoMatch[1],
       embedUrl: `https://player.vimeo.com/video/${vimeoMatch[1]}?${autoPlayParam}`,
+    };
+  }
+
+  // 4. TikTok
+  const tiktokMatch = cleanUrl.match(/tiktok\.com\/.*video\/(\d+)/);
+  if (tiktokMatch && tiktokMatch[1]) {
+    return {
+      type: 'tiktok',
+      videoId: tiktokMatch[1],
+      embedUrl: `https://www.tiktok.com/embed/v2/${tiktokMatch[1]}`,
     };
   }
 

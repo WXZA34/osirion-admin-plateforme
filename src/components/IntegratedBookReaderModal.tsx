@@ -69,7 +69,7 @@ export const IntegratedBookReaderModal: React.FC<IntegratedBookReaderModalProps>
   const [fontFamily, setFontFamily] = useState<'serif' | 'sans'>('serif');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isNarrating, setIsNarrating] = useState(false);
-  const [viewPdfMode, setViewPdfMode] = useState(false);
+  const [viewPdfMode, setViewPdfMode] = useState(!!book.pdfPath);
   const [showToc, setShowToc] = useState(false);
   const [bookmarkSaved, setBookmarkSaved] = useState(false);
 
@@ -156,8 +156,8 @@ export const IntegratedBookReaderModal: React.FC<IntegratedBookReaderModalProps>
       } bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200`}
     >
       <div
-        className={`w-full ${
-          isFullscreen ? 'h-full rounded-none' : 'max-w-5xl max-h-[95vh] rounded-3xl'
+        className={`w-[98vw] ${
+          isFullscreen ? 'h-full rounded-none' : 'max-w-7xl h-[95vh] rounded-2xl sm:rounded-3xl'
         } ${getThemeClasses()} border shadow-2xl flex flex-col overflow-hidden transition-all duration-300`}
       >
         {/* TOP TOOLBAR */}
@@ -192,6 +192,22 @@ export const IntegratedBookReaderModal: React.FC<IntegratedBookReaderModalProps>
               <FileText className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Sommaire</span>
             </button>
+
+            {/* PDF Viewer Toggle */}
+            {book.pdfPath && (
+              <button
+                onClick={() => setViewPdfMode(!viewPdfMode)}
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                  viewPdfMode
+                    ? 'bg-amber-500 text-slate-950'
+                    : 'bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/20'
+                }`}
+                title={viewPdfMode ? 'Revenir au texte' : 'Voir le PDF original'}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{viewPdfMode ? 'Fermer le PDF' : 'Lire le PDF original'}</span>
+              </button>
+            )}
 
             {/* Read Aloud TTS Narrator */}
             <button
@@ -329,7 +345,12 @@ export const IntegratedBookReaderModal: React.FC<IntegratedBookReaderModalProps>
           )}
 
           {/* READING CANVAS */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-8 flex justify-center">
+          <div className={`flex-1 overflow-y-auto ${viewPdfMode ? 'p-2 sm:p-4' : 'p-4 sm:p-8'} flex justify-center bg-black/5 dark:bg-white/5`}>
+            {viewPdfMode && book.pdfPath ? (
+              <div className="w-full h-full bg-white rounded-xl sm:rounded-2xl overflow-hidden border border-slate-200/50 shadow-xl flex flex-col items-center justify-center">
+                <iframe src={`${book.pdfPath.startsWith('http') ? book.pdfPath : `/${book.pdfPath.replace(/^\/?/, '')}`}#view=Fit&navpanes=0`} className="w-full h-full border-0" title={book.title} />
+              </div>
+            ) : (
             <div
               className={`w-full max-w-3xl ${getReaderSurfaceClasses()} rounded-3xl p-6 sm:p-10 border my-auto transition-all`}
             >
@@ -394,6 +415,7 @@ export const IntegratedBookReaderModal: React.FC<IntegratedBookReaderModalProps>
                 </div>
               </div>
             </div>
+            )}
           </div>
         </div>
 
