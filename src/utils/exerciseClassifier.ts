@@ -15,6 +15,7 @@ export interface InferredDojoMetadata {
   configProfile: DojoConfigProfile;
   movementSplit: MovementSplit;
   hasAiSupport: boolean;
+  aiEngine?: 'elbow' | 'knee' | 'hip_hinge' | 'isometric' | 'explosive';
 }
 
 export function inferDojoMetadata(raw: any, id: string): InferredDojoMetadata {
@@ -192,6 +193,22 @@ export function inferDojoMetadata(raw: any, id: string): InferredDojoMetadata {
     ? raw.hasAiSupport
     : executionMode === 'MODE_VISION';
 
+  // 8. Inferred AI Engine
+  let aiEngine: 'elbow' | 'knee' | 'hip_hinge' | 'isometric' | 'explosive' = raw.aiEngine;
+  if (!aiEngine) {
+    if (dojoMode === 'STATIC_HOLD' || movementSplit === 'CORE') {
+      aiEngine = 'isometric';
+    } else if (targetArea === 'BAS_DU_CORPS') {
+      aiEngine = 'knee';
+    } else if (name.includes('burpee') || name.includes('jump') || name.includes('saut')) {
+      aiEngine = 'explosive';
+    } else if (name.includes('deadlift') || name.includes('pont') || name.includes('bassin')) {
+      aiEngine = 'hip_hinge';
+    } else {
+      aiEngine = 'elbow';
+    }
+  }
+
   return {
     targetArea,
     trainingType,
@@ -200,5 +217,6 @@ export function inferDojoMetadata(raw: any, id: string): InferredDojoMetadata {
     configProfile,
     movementSplit,
     hasAiSupport,
+    aiEngine,
   };
 }

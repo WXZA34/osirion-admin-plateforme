@@ -12,7 +12,7 @@ export interface AthleteUser {
   avatarUrl?: string;
   subscriptionTier: SubscriptionTier;
   subscriptionStatus: SubscriptionStatus;
-  status: 'ACTIVE' | 'SUSPENDED';
+  status: 'ACTIVE' | 'SUSPENDED' | 'WARNED';
   fitnessLevel: AthleteLevel;
   registeredAt: string;
   lastWorkoutAt: string;
@@ -58,6 +58,9 @@ export interface AthleteUser {
   clanIds: string[];
   friendIds: string[];
   onlineStatus: 'online' | 'offline' | 'training';
+  streak?: number;
+  lastQuestAt?: number;
+  createdAtMs?: number;
 }
 
 export type MuscleGroup =
@@ -137,6 +140,7 @@ export interface ExerciseItem {
   // --- Paramètres d'arbitrage IA du Dojo (Google ML Kit Pose Detection) ---
   aiPoseDetection: boolean;
   hasAiSupport?: boolean; // Compatibilité Flutter (si false, filtré hors du Mode Vision)
+  aiEngine?: 'elbow' | 'knee' | 'hip_hinge' | 'isometric' | 'explosive' | string; // Moteur biomécanique ML Kit
   minAngle: number; // Angle flexion articulation (ex: 85° pour coudes pushups)
   maxAngle: number; // Extension complète (ex: 170°)
   sensitivity: number; // Tolérance angulaire (0.1 à 1.0)
@@ -173,7 +177,9 @@ export interface WorkoutProgram {
   isPremiumOnly: boolean;
   published: boolean;
   author: string;
-  exercisesList: string[]; // Noms des exercices inclus
+  imageUrl?: string;
+  exercisesList: string[]; // Keep for backward compatibility
+  programExercises?: { exerciseId: string; sets: number; reps: number; restTime?: number }[];
 }
 
 export interface StreetWorkoutSpot {
@@ -200,12 +206,13 @@ export interface PushNotificationCampaign {
   id: string;
   title: string;
   bodyText: string;
-  targetAudience: 'ALL_ATHLETES' | 'INACTIVE_3_DAYS' | 'PRO_SUBSCRIBERS' | 'BEGINNERS_ONLY';
+  targetAudience: 'ALL_ATHLETES' | 'INACTIVE_3_DAYS' | 'PRO_SUBSCRIBERS' | 'BEGINNERS_ONLY' | 'SPECIFIC_ATHLETE';
+  targetUserId?: string;
   scheduledFor: string;
   status: 'SENT' | 'SCHEDULED' | 'DRAFT';
   recipientsCount: number;
   openRatePercent?: number;
-  deepLinkScreen: 'WORKOUT_TODAY' | 'STORE_PRO' | 'CHALLENGE_WEEK' | 'NEW_SPOT';
+  deepLinkScreen: 'WORKOUT_TODAY' | 'STORE_PRO' | 'CHALLENGE_WEEK' | 'NEW_SPOT' | 'DAILY_VIDEO';
 }
 
 export interface RevenueMetric {

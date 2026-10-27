@@ -10,12 +10,7 @@ import {
   ReportSeverity,
   SanctionType,
 } from '../types/moderation';
-import {
-  INITIAL_USER_REPORTS,
-  INITIAL_USER_SANCTIONS,
-  INITIAL_ADMIN_TRANSMISSIONS,
-  INITIAL_EVIDENCE_STORE,
-} from '../data/moderationData';
+// Mockups retirés, nous utilisons une initialisation vide
 import {
   ShieldAlert,
   Radio,
@@ -51,6 +46,7 @@ import {
   KeyRound,
   FileSearch,
 } from 'lucide-react';
+import { SystemAnnouncementsManager } from './SystemAnnouncementsManager';
 
 interface AlphaConnectModerationManagerProps {
   athletes: AthleteUser[];
@@ -71,7 +67,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
   >('reports');
 
   // Datasets
-  const [reports, setReports] = useState<UserReport[]>(INITIAL_USER_REPORTS);
+  const [reports, setReports] = useState<UserReport[]>([]);
 
   useEffect(() => {
     import('../lib/firebase').then(({ db }) => {
@@ -91,17 +87,26 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
               reason: 'UNSPORTING', // Default mapped
               reasonLabel: data.reason || 'Autre',
               severity: 'MEDIUM',
-              status: data.status === 'treated' ? 'RESOLVED_WARNING' : 'PENDING',
+              status: (data.status === 'treated' || data.status === 'RESOLVED_WARNING') ? 'RESOLVED_WARNING' : 
+                      data.status === 'RESOLVED_BAN' ? 'RESOLVED_BAN' : 
+                      data.status === 'DISMISSED' ? 'DISMISSED' : 'PENDING',
               contextChannel: data.reportedType === 'CLAN' ? 'Clan' : 'Joueur',
               description: data.description || '',
-              evidenceList: data.proofUrl ? [{
+              evidenceList: data.proofUrls ? data.proofUrls.map((url: string, index: number) => ({
+                id: `${doc.id}_${index}`,
+                title: `Preuve Utilisateur ${index + 1}`,
+                type: 'SCREENSHOT',
+                url: url,
+                description: 'Preuve fournie par l\'utilisateur',
+                capturedAt: data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleString() : ''
+              })) : (data.proofUrl ? [{
                 id: doc.id,
                 title: 'Preuve Utilisateur',
                 type: 'SCREENSHOT',
                 url: data.proofUrl,
                 description: 'Preuve fournie par l\'utilisateur',
                 capturedAt: data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleString() : ''
-              }] : [],
+              }] : []),
               createdAt: data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleString() : '',
               updatedAt: data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleString() : ''
             };
@@ -112,9 +117,49 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
       });
     });
   }, []);
-  const [sanctions, setSanctions] = useState<UserSanction[]>(INITIAL_USER_SANCTIONS);
-  const [adminTransmissions, setAdminTransmissions] = useState<AdminTransmission[]>(INITIAL_ADMIN_TRANSMISSIONS);
-  const [evidenceStore, setEvidenceStore] = useState<ModerationEvidence[]>(INITIAL_EVIDENCE_STORE);
+  const [sanctions, setSanctions] = useState<UserSanction[]>([]);
+
+  useEffect(() => {
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ collection, onSnapshot, query, orderBy }) => {
+        const q = query(collection(db, 'sanctions'), orderBy('issuedAt', 'desc'));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+          const fetchedSanctions: UserSanction[] = snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+              id: doc.id,
+              ...data
+            } as UserSanction;
+          });
+          setSanctions(fetchedSanctions);
+        });
+        return () => unsubscribe();
+      });
+    });
+  }, []);
+  const [adminTransmissions, setAdminTransmissions] = useState<AdminTransmission[]>([]);
+  const [evidenceStore, setEvidenceStore] = useState<ModerationEvidence[]>([]);
+
+  // Écoute en temps réel de Firestore pour les Preuves et Transmissions
+  useEffect(() => {
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ collection, onSnapshot, query }) => {
+        const evQ = query(collection(db, 'moderation_evidences'));
+        const unsubEv = onSnapshot(evQ, (snapshot) => {
+          const evs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ModerationEvidence));
+          setEvidenceStore(evs.reverse());
+        });
+
+        const trQ = query(collection(db, 'admin_transmissions'));
+        const unsubTr = onSnapshot(trQ, (snapshot) => {
+          const trs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AdminTransmission));
+          setAdminTransmissions(trs.reverse());
+        });
+
+        return () => { unsubEv(); unsubTr(); };
+      });
+    });
+  }, []);
 
   // Filters & Searches
   const [reportStatusFilter, setReportStatusFilter] = useState<string>('ALL');
@@ -132,6 +177,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
   const [sanctionType, setSanctionType] = useState<SanctionType>('WARNING');
   const [sanctionReason, setSanctionReason] = useState('');
   const [sanctionEvidenceId, setSanctionEvidenceId] = useState<string>(evidenceStore[0]?.id || '');
+  const [relatedReportId, setRelatedReportId] = useState<string | null>(null);
 
   // Formulaire Preuve
   const [newEvidenceTitle, setNewEvidenceTitle] = useState('');
@@ -164,7 +210,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
     import('../lib/firebase').then(({ db }) => {
       import('firebase/firestore').then(({ doc, updateDoc }) => {
         updateDoc(doc(db, 'reports', reportId), {
-          status: 'treated'
+          status: resolution
         }).catch(err => console.error('Error updating report', err));
       });
     });
@@ -185,6 +231,19 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
       setInspectedReport(null);
     }
     showToast(`Signalement mis à jour : ${resolution}`);
+  };
+
+  const handleDeleteReport = (reportId: string) => {
+    if (!window.confirm("Es-tu sûr de vouloir supprimer définitivement ce dossier de signalement ?")) return;
+
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ doc, deleteDoc }) => {
+        deleteDoc(doc(db, 'reports', reportId)).catch(console.error);
+      });
+    });
+
+    setReports((prev) => prev.filter((r) => r.id !== reportId));
+    showToast(`Le dossier a été supprimé de la base de données.`);
   };
 
   const handleApplySanction = (e: React.FormEvent) => {
@@ -240,6 +299,18 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
           if (onUpdateAthlete) {
             onUpdateAthlete(updatedAthlete);
           }
+        } else if (effectiveSanctionType === 'WARNING') {
+          updateDoc(doc(db, 'users', athlete.id), {
+            status: 'WARNED'
+          }).catch(console.error);
+          
+          const updatedAthlete: AthleteUser = {
+            ...athlete,
+            status: 'WARNED',
+          };
+          if (onUpdateAthlete) {
+            onUpdateAthlete(updatedAthlete);
+          }
         }
       });
     });
@@ -250,6 +321,11 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
         '⚠️ Injonction de Modération Osirion',
         `Une décision disciplinaire (${effectiveSanctionType}) a été prise concernant votre compte @${athlete.username}.`
       );
+    }
+
+    if (relatedReportId) {
+      handleResolveReport(relatedReportId, effectiveSanctionType === 'WARNING' ? 'RESOLVED_WARNING' : 'RESOLVED_BAN');
+      setRelatedReportId(null);
     }
 
     setShowSanctionModal(false);
@@ -294,6 +370,14 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
     };
 
     setEvidenceStore([newEvidence, ...evidenceStore]);
+    
+    // Sauvegarde Firebase
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ doc, setDoc }) => {
+        setDoc(doc(db, 'moderation_evidences', newEvidence.id), newEvidence).catch(console.error);
+      });
+    });
+
     setShowAddEvidenceModal(false);
     setNewEvidenceTitle('');
     setNewEvidenceDesc('');
@@ -310,7 +394,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
       title: adminMsgTitle.trim(),
       body: adminMsgBody.trim(),
       targetAudience: adminMsgAudience,
-      targetAthleteUsername: adminMsgTargetAthlete || undefined,
+      targetAthleteUsername: adminMsgTargetAthlete || null,
       priority: adminMsgPriority,
       sentBy: 'SuperAdmin Modération',
       sentAt: 'Aujourd’hui à ' + new Date().toLocaleTimeString().slice(0, 5),
@@ -319,6 +403,13 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
     };
 
     setAdminTransmissions([newTrans, ...adminTransmissions]);
+    
+    // Sauvegarde Firebase
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ doc, setDoc }) => {
+        setDoc(doc(db, 'admin_transmissions', newTrans.id), newTrans).catch(console.error);
+      });
+    });
 
     // Push général
     if (onSendPushNotification) {
@@ -556,20 +647,33 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
             </div>
 
             {/* Liste des signalements */}
-            <div className="space-y-3">
-              {reports
-                .filter((r) => {
-                  const matchStatus = reportStatusFilter === 'ALL' || r.status === reportStatusFilter;
-                  const matchSeverity = reportSeverityFilter === 'ALL' || r.severity === reportSeverityFilter;
-                  const q = (reportSearchQuery || '').toLowerCase();
-                  const matchSearch =
-                    (r.reportedUsername || '').toLowerCase().includes(q) ||
-                    (r.reporterUsername || '').toLowerCase().includes(q) ||
-                    (r.description || '').toLowerCase().includes(q);
-                  return matchStatus && matchSeverity && matchSearch;
-                })
-                .map((report) => (
-                  <div
+            <div className="space-y-6">
+              {[
+                { title: 'Signalements à Traiter', pending: true, icon: <ShieldAlert className="w-5 h-5" />, color: 'text-rose-600', border: false },
+                { title: 'Signalements Traités', pending: false, icon: <CheckCircle2 className="w-5 h-5" />, color: 'text-emerald-600', border: true }
+              ].map((section, idx) => {
+                const sectionReports = reports
+                  .filter((r) => {
+                    const matchStatus = reportStatusFilter === 'ALL' || r.status === reportStatusFilter;
+                    const matchSeverity = reportSeverityFilter === 'ALL' || r.severity === reportSeverityFilter;
+                    const q = (reportSearchQuery || '').toLowerCase();
+                    const matchSearch =
+                      (r.reportedUsername || '').toLowerCase().includes(q) ||
+                      (r.reporterUsername || '').toLowerCase().includes(q) ||
+                      (r.description || '').toLowerCase().includes(q);
+                    return matchStatus && matchSeverity && matchSearch;
+                  })
+                  .filter(r => section.pending ? (r.status === 'PENDING' || r.status === 'INVESTIGATING') : (r.status !== 'PENDING' && r.status !== 'INVESTIGATING'));
+                
+                if (sectionReports.length === 0) return null;
+
+                return (
+                  <div key={idx} className="space-y-3">
+                    <h3 className={`font-black ${section.color} text-lg flex items-center gap-2 ${section.border ? 'pt-6 border-t border-slate-200' : ''}`}>
+                      {section.icon} {section.title} ({sectionReports.length})
+                    </h3>
+                    {sectionReports.map((report) => (
+                      <div
                     key={report.id}
                     className={`rounded-2xl border p-4 sm:p-5 transition space-y-3.5 ${
                       report.status === 'PENDING'
@@ -660,7 +764,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
                     )}
 
                     {/* Actions de décision : Lancer un Avertissement, Bannir, ou Classer sans suite */}
-                    {userRole === 'superadmin' && report.status !== 'RESOLVED_BAN' && report.status !== 'RESOLVED_WARNING' && (
+                    {userRole === 'superadmin' && (report.status === 'PENDING' || report.status === 'INVESTIGATING') && (
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
                         <div className="text-[11px] text-slate-400 italic">
                           Décision disciplinaire requise par l'administrateur :
@@ -678,6 +782,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
                               setSanctionType('WARNING');
                               setSanctionReason(`Avertissement disciplinaire suite au signalement #${report.id} : ${report.reasonLabel}.`);
                               setSanctionEvidenceId(report.evidenceList[0]?.id || evidenceStore[0]?.id || '');
+                              setRelatedReportId(report.id);
                               setShowSanctionModal(true);
                             }}
                             className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold transition flex items-center gap-1.5"
@@ -691,6 +796,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
                               setSanctionType('PERMANENT_BAN');
                               setSanctionReason(`Bannissement permanent prononcé suite aux preuves matérielles du dossier #${report.id}.`);
                               setSanctionEvidenceId(report.evidenceList[0]?.id || evidenceStore[0]?.id || '');
+                              setRelatedReportId(report.id);
                               setShowSanctionModal(true);
                             }}
                             className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold transition flex items-center gap-1.5"
@@ -701,8 +807,24 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
                         </div>
                       </div>
                     )}
+
+                    {/* Actions de suppression (pour les dossiers traités) */}
+                    {userRole === 'superadmin' && report.status !== 'PENDING' && report.status !== 'INVESTIGATING' && (
+                      <div className="flex justify-end pt-2 border-t border-slate-100 mt-2">
+                        <button
+                          onClick={() => handleDeleteReport(report.id)}
+                          className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 font-semibold text-xs transition flex items-center gap-1.5"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Supprimer définitivement ce dossier</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -769,6 +891,18 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
                         <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold">
                           LEVÉE
                         </span>
+                      )}
+
+                      {sanc.sanctionType === 'WARNING' && sanc.isActive && (
+                        (sanc as any).acknowledged ? (
+                          <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" /> J'AI COMPRIS
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold flex items-center gap-1">
+                            <Clock className="w-3 h-3" /> EN ATTENTE DE LECTURE
+                          </span>
+                        )
                       )}
 
                       {userRole === 'superadmin' && sanc.isActive && (
@@ -871,58 +1005,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
       {/* 6. ONGLET 4 : MESSAGES ADMINS & TRANSMISSIONS SYSTÈME */}
       {activeTab === 'admin_transmissions' && (
         <div className="space-y-4">
-          <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Megaphone className="w-4 h-4 text-blue-600" />
-                  <span>Transmissions Officielles « Système Osirion »</span>
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Diffusions directes envoyées dans l'application mobile des athlètes (sans écoute des chats privés)
-                </p>
-              </div>
-
-              <button
-                onClick={() => setShowAdminMessageModal(true)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Nouvelle Transmission Admin</span>
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              {adminTransmissions.map((trans) => (
-                <div key={trans.id} className="bg-slate-50 rounded-2xl border border-slate-200 p-4 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
-                          trans.priority === 'DISCIPLINARY'
-                            ? 'bg-rose-600 text-white'
-                            : 'bg-blue-600 text-white'
-                        }`}
-                      >
-                        {trans.priority}
-                      </span>
-                      <h4 className="font-bold text-slate-900 text-sm">{trans.title}</h4>
-                    </div>
-                    <span className="text-[11px] text-slate-400 font-mono">{trans.sentAt}</span>
-                  </div>
-
-                  <p className="text-xs text-slate-700 leading-relaxed bg-white p-3 rounded-xl border border-slate-200/60">
-                    {trans.body}
-                  </p>
-
-                  <div className="flex items-center justify-between text-xs text-slate-500 pt-1 font-mono">
-                    <span>Cible : <strong>{trans.targetAudience}</strong> {trans.targetAthleteUsername && `(@${trans.targetAthleteUsername})`}</span>
-                    <span>Destinataires : {trans.recipientsCount}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <SystemAnnouncementsManager />
         </div>
       )}
 
@@ -992,7 +1075,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
                 <AlertOctagon className="w-5 h-5 text-amber-600" />
                 <h3 className="font-bold text-base text-slate-900">Lancer une Sanction / Avertissement</h3>
               </div>
-              <button onClick={() => setShowSanctionModal(false)} className="text-slate-400 p-1">
+              <button onClick={() => { setShowSanctionModal(false); setRelatedReportId(null); }} className="text-slate-400 p-1">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1058,7 +1141,7 @@ export const AlphaConnectModerationManager: React.FC<AlphaConnectModerationManag
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowSanctionModal(false)}
+                  onClick={() => { setShowSanctionModal(false); setRelatedReportId(null); }}
                   className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-semibold"
                 >
                   Annuler

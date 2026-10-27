@@ -397,17 +397,17 @@ export const DOJO_TRAINING_TYPES: DojoRubricItem<DojoTrainingType>[] = [
 export const DOJO_EXECUTION_MODES: DojoRubricItem<DojoExecutionMode>[] = [
   {
     id: 'MODE_VISION',
-    label: 'MODE VISION (IA Active)',
-    tagline: 'Tracking Articulations • Validation Automatique',
-    description: 'La caméra mobile tracke la pose via ML Kit en temps réel pour valider les répétitions et déceler le kipping.',
+    label: 'COMPATIBLE VISION IA (+ Mode Guide)',
+    tagline: 'Tracking Articulations & Comptage Caméra ML Kit',
+    description: 'Ces exercices disposent du tracking de pose automatique et sont également accessibles en Mode Guide.',
     badgeColor: 'bg-cyan-50 text-cyan-700 border-cyan-200',
   },
   {
     id: 'MODE_GUIDE',
-    label: 'MODE GUIDE (3D & Chrono)',
-    tagline: 'Simulation 3D • Mode Chrono • Validation Manuelle',
-    description: 'Affichage guidé en temps réel avec chronomètre et bip de cadence, sans besoin de pointer la caméra.',
-    badgeColor: 'bg-slate-100 text-slate-700 border-slate-300',
+    label: 'EXCLUSIF AU MODE GUIDE (Sans IA)',
+    tagline: 'Simulation 3D & Mode Chrono Seul',
+    description: 'Mouvements sans modèle cinématique IA. Masqués en Mode Vision IA et réservés au Mode Guide.',
+    badgeColor: 'bg-indigo-50 text-indigo-700 border-indigo-200',
   },
 ];
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../lib/firebase';
+import { db, storage } from '../lib/firebase';
 import {
   collection,
   doc,
@@ -9,6 +9,12 @@ import {
   query,
   orderBy,
 } from 'firebase/firestore';
+import {
+  ref as storageRef,
+  uploadBytesResumable,
+  uploadBytes,
+  getDownloadURL,
+} from 'firebase/storage';
 import { AthleteUser } from '../types/admin';
 import {
   DailyTransmissionVideo,
@@ -23,6 +29,7 @@ import { parseVideoUrl } from '../utils/videoUtils';
 import { IntegratedVideoModal } from './IntegratedVideoModal';
 import { FirestoreRulesGuideModal } from './FirestoreRulesGuideModal';
 import {
+  Bell,
   Radio,
   Play,
   Pause,
@@ -101,7 +108,9 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
   const [activeEditMethod, setActiveEditMethod] = useState<'link' | 'upload'>('link');
   const [isSavingToFirestore, setIsSavingToFirestore] = useState<boolean>(false);
   const [isUploadingFile, setIsUploadingFile] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [notifyOnQuickSave, setNotifyOnQuickSave] = useState<boolean>(true);
 
   // Firestore Security & Permission Diagnostics
   const [firestoreStatus, setFirestoreStatus] = useState<'unknown' | 'connected' | 'permission_denied'>('unknown');
@@ -222,6 +231,16 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
   // GESTIONNAIRE DE SAUVEGARDE DIRECTE SUR global_config/daily_content
   // =========================================================================
   const handleSaveDailyContent = async () => {
+    if (isUploadingFile) {
+      showToast('⚠️ Téléversement de la vidéo en cours vers Firebase Storage... Veuillez patienter jusqu\'à 100%.');
+      return;
+    }
+
+    if (editUrl.trim().startsWith('blob:')) {
+      showToast('⚠️ Impossible d’enregistrer une vidéo locale non hébergée (blob:). Veuillez attendre la fin du téléversement vers Firebase Storage ou entrer un lien vidéo direct.');
+      return;
+    }
+
     if (!editTitle.trim() || !editUrl.trim()) {
       showToast('Veuillez renseigner au moins le titre et l’URL de la vidéo.');
       return;
@@ -275,7 +294,25 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
         { merge: true }
       );
       setFirestoreStatus('connected');
-      showToast('✅ Vidéo du jour synchronisée dans Firestore (global_config/daily_content) !');
+      
+      if (notifyOnQuickSave && onSendPushNotification) {
+        const interactionText =
+          activeTransmission.interactionType === 'POLL'
+            ? 'Donnez votre voix au sondage du jour !'
+            : activeTransmission.interactionType === 'COMMENTS'
+            ? 'Posez vos questions et donnez votre avis !'
+            : activeTransmission.interactionType === 'BOTH'
+            ? 'Participez au sondage et à la session de débat !'
+            : 'Regardez dès maintenant la vidéo tactique du jour.';
+
+        onSendPushNotification(
+          `⚡ Transmission du Jour : ${editTitle.trim()}`,
+          `${interactionText} Disponible sur votre écran d’accueil Osirion.`
+        );
+        showToast('🚀 Vidéo synchronisée & Notification Push FCM transmise à tous les smartphones !');
+      } else {
+        showToast('✅ Vidéo du jour synchronisée dans Firestore (global_config/daily_content) !');
+      }
     } catch (err: any) {
       console.warn('Firestore write notice:', err);
       if (err?.code === 'permission-denied' || err?.message?.toLowerCase().includes('permission')) {
@@ -289,6 +326,31 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
       setIsSavingToFirestore(false);
       setIsInlinePlaying(false);
     }
+  };
+
+  // Envoi manuel immédiat d'une notification push FCM à tous les athlètes
+  const handleSendManualFCMAlert = () => {
+    if (!onSendPushNotification) {
+      showToast('Service de notification push non disponible.');
+      return;
+    }
+
+    const currentTitle = editTitle.trim() || activeTransmission.title;
+    const interactionText =
+      activeTransmission.interactionType === 'POLL'
+        ? 'Donnez votre voix au sondage du jour !'
+        : activeTransmission.interactionType === 'COMMENTS'
+        ? 'Posez vos questions et donnez votre avis sur la séance !'
+        : activeTransmission.interactionType === 'BOTH'
+        ? 'Participez au sondage et à la session de débat !'
+        : 'Regardez dès maintenant la vidéo tactique du jour.';
+
+    onSendPushNotification(
+      `⚡ Transmission du Jour : ${currentTitle}`,
+      `${interactionText} Disponible sur votre écran d’accueil Osirion.`
+    );
+
+    showToast(`🔔 Notification Push FCM envoyée avec succès sur les smartphones pour « ${currentTitle} » !`);
   };
 
   const handleTestFirestoreConnection = async () => {
@@ -319,7 +381,7 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
     }
   };
 
-  const handleVideoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVideoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -329,20 +391,69 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
     }
 
     setIsUploadingFile(true);
+    setUploadProgress(0);
+    setUploadedFileName(`${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} Mo)`);
+
     try {
-      const localBlobUrl = URL.createObjectURL(file);
-      setEditUrl(localBlobUrl);
-      setUploadedFileName(`${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} Mo)`);
+      showToast(`Téléversement de « ${file.name} » vers Firebase Storage en cours...`);
+      const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const fileRef = storageRef(storage, `daily_transmissions/${Date.now()}_${cleanFileName}`);
+      const metadata = { contentType: file.type || 'video/mp4' };
+      const uploadTask = uploadBytesResumable(fileRef, file, metadata);
 
-      if (!editTitle || editTitle === 'force') {
-        setEditTitle(file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '));
-      }
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          if (snapshot.totalBytes > 0) {
+            const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+            setUploadProgress(progress);
+          }
+        },
+        async (error) => {
+          console.warn('Resumable upload error, attempting direct uploadBytes fallback:', error);
+          try {
+            showToast('Transfert en mode direct...');
+            await uploadBytes(fileRef, file, metadata);
+            const downloadUrl = await getDownloadURL(fileRef);
+            setEditUrl(downloadUrl);
+            setUploadProgress(100);
+            setIsUploadingFile(false);
+            if (!editTitle || editTitle === 'force') {
+              setEditTitle(file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '));
+            }
+            showToast(`🎉 Vidéo « ${file.name} » téléversée avec succès sur Firebase Storage !`);
+          } catch (fallbackErr: any) {
+            console.error('Direct uploadBytes also failed:', fallbackErr);
+            showToast(`❌ Erreur téléversement : ${fallbackErr?.message || error.message}`);
+            setIsUploadingFile(false);
+            setUploadProgress(null);
+          }
+        },
+        async () => {
+          try {
+            const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+            setEditUrl(downloadUrl);
+            setUploadProgress(100);
+            setIsUploadingFile(false);
 
-      showToast(`Fichier « ${file.name} » chargé ! Cliquez sur Enregistrer pour l’activer.`);
-    } catch {
-      showToast('Erreur lors du chargement du fichier vidéo local.');
-    } finally {
+            if (!editTitle || editTitle === 'force') {
+              setEditTitle(file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '));
+            }
+
+            showToast(`🎉 Vidéo « ${file.name} » téléversée avec succès sur Firebase Storage ! Cliquez sur Enregistrer.`);
+          } catch (err: any) {
+            console.error('Error getting download URL:', err);
+            showToast(`❌ Erreur URL : ${err?.message || 'Impossible d\'obtenir l\'URL'}`);
+            setIsUploadingFile(false);
+            setUploadProgress(null);
+          }
+        }
+      );
+    } catch (err: any) {
+      console.error('Upload initiation error:', err);
+      showToast(`❌ Erreur : ${err?.message || 'Erreur lors du téléversement'}`);
       setIsUploadingFile(false);
+      setUploadProgress(null);
     }
   };
 
@@ -369,6 +480,80 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
   const [newArc, setNewArc] = useState<TransmissionArc>('Winter Arc');
   const [newThumbnailUrl, setNewThumbnailUrl] = useState('');
   const [newDurationFormatted, setNewDurationFormatted] = useState('05m 30s');
+  const [isModalUploading, setIsModalUploading] = useState(false);
+  const [modalUploadProgress, setModalUploadProgress] = useState<number | null>(null);
+
+  const handleModalFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('video/')) {
+      showToast('Format non supporté. Veuillez sélectionner un fichier vidéo.');
+      return;
+    }
+
+    setIsModalUploading(true);
+    setModalUploadProgress(0);
+
+    try {
+      showToast(`Téléversement de « ${file.name} » vers Firebase Storage...`);
+      const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const fileRef = storageRef(storage, `daily_transmissions/${Date.now()}_${cleanFileName}`);
+      const metadata = { contentType: file.type || 'video/mp4' };
+      const uploadTask = uploadBytesResumable(fileRef, file, metadata);
+
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          if (snapshot.totalBytes > 0) {
+            const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+            setModalUploadProgress(progress);
+          }
+        },
+        async (error) => {
+          console.warn('Modal resumable error, trying direct uploadBytes fallback:', error);
+          try {
+            await uploadBytes(fileRef, file, metadata);
+            const downloadUrl = await getDownloadURL(fileRef);
+            setNewVideoUrl(downloadUrl);
+            setNewSourceType('FIREBASE_MP4');
+            setIsModalUploading(false);
+            setModalUploadProgress(100);
+            if (!newTitle) {
+              setNewTitle(file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '));
+            }
+            showToast(`🎉 Vidéo « ${file.name} » téléversée avec succès sur Firebase Storage !`);
+          } catch (fallbackErr: any) {
+            console.error('Modal storage upload error:', fallbackErr);
+            showToast(`❌ Erreur téléversement : ${fallbackErr?.message || error.message}`);
+            setIsModalUploading(false);
+            setModalUploadProgress(null);
+          }
+        },
+        async () => {
+          try {
+            const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+            setNewVideoUrl(downloadUrl);
+            setNewSourceType('FIREBASE_MP4');
+            setIsModalUploading(false);
+            setModalUploadProgress(100);
+            if (!newTitle) {
+              setNewTitle(file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '));
+            }
+            showToast(`🎉 Vidéo « ${file.name} » téléversée avec succès sur Firebase Storage !`);
+          } catch (err: any) {
+            showToast(`❌ Erreur : ${err?.message}`);
+            setIsModalUploading(false);
+            setModalUploadProgress(null);
+          }
+        }
+      );
+    } catch (err: any) {
+      showToast(`❌ Erreur : ${err?.message}`);
+      setIsModalUploading(false);
+      setModalUploadProgress(null);
+    }
+  };
 
   // INTERACTION CHOICE : SONDAGE vs COMMENTAIRES vs LES DEUX vs AUCUN
   const [newInteractionType, setNewInteractionType] = useState<TransmissionInteractionType>('POLL');
@@ -500,7 +685,24 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
 
     // Synchronisation automatique dans Firestore (global_config/daily_content et collection daily_transmissions)
     try {
+      // 1. Archiver les anciennes vidéos actives dans Firestore
+      transmissions.forEach((oldT) => {
+        if (oldT.status === 'ACTIVE' && oldT.id !== newTrans.id) {
+          setDoc(
+            doc(db, 'daily_transmissions', oldT.id),
+            {
+              status: 'ARCHIVED',
+              poll: oldT.poll ? { ...oldT.poll, isClosed: true } : undefined,
+              commentSession: oldT.commentSession ? { ...oldT.commentSession, isOpen: false } : undefined,
+            },
+            { merge: true }
+          ).catch(() => {});
+        }
+      });
+
+      // 2. Mettre à jour global_config/daily_content avec l'ID actif et les questions du jour
       setDoc(doc(db, 'global_config', 'daily_content'), {
+        currentTransmissionId: newTrans.id,
         dailyVideoUrl: newTrans.videoUrl,
         dailyVideoTitle: newTrans.title,
         dailyVideoDescription: newTrans.description,
@@ -512,12 +714,11 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
         updatedAt: new Date().toISOString(),
       }, { merge: true }).catch(() => {});
 
+      // 3. Écrire la nouvelle transmission active
       setDoc(doc(db, 'daily_transmissions', newTrans.id), newTrans).catch(() => {});
     } catch {
       // Mode hors-ligne pris en charge
     }
-
-    showToast(`Transmission du jour « ${newTrans.title} » publiée ! L'ancienne vidéo a été archivée avec son historique.`);
 
     // Push notification trigger
     if (notifyAthletes && onSendPushNotification) {
@@ -534,6 +735,9 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
         `⚡ Transmission du Jour : ${newTrans.title}`,
         `${interactionText} Disponible sur votre écran d’accueil Osirion.`
       );
+      showToast(`🚀 Transmission « ${newTrans.title} » publiée & Alerte Push FCM diffusée à tous les smartphones !`);
+    } else {
+      showToast(`Transmission du jour « ${newTrans.title} » publiée ! L'ancienne vidéo a été archivée avec son historique.`);
     }
   };
 
@@ -819,18 +1023,29 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
           </button>
         </div>
 
-        {/* Action Button: Mettre en ligne la vidéo du jour */}
+        {/* Action Button: Mettre en ligne la vidéo du jour & Alerte Push FCM */}
         {userRole === 'superadmin' && (
-          <button
-            onClick={() => {
-              resetPublishForm();
-              setShowPublishModal(true);
-            }}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white text-xs font-bold shadow-md hover:shadow-lg transition transform active:scale-95"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Mettre en Ligne la Vidéo du Jour</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSendManualFCMAlert}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/30 text-xs font-bold shadow-md hover:shadow-lg transition transform active:scale-95 cursor-pointer"
+              title="Envoyer une notification push FCM instantanée à tous les athlètes sur leur smartphone"
+            >
+              <Bell className="w-4 h-4 text-amber-400 animate-pulse" />
+              <span>Alerter par Push FCM</span>
+            </button>
+            <button
+              onClick={() => {
+                resetPublishForm();
+                setShowPublishModal(true);
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white text-xs font-bold shadow-md hover:shadow-lg transition transform active:scale-95 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Mettre en Ligne la Vidéo du Jour</span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -1162,30 +1377,70 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
                   ) : (
                     /* Method 2: Téléversement de fichier */
                     <div className="space-y-2">
-                      <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                        Sélectionner ou Glisser votre Fichier Vidéo
+                      <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center justify-between">
+                        <span>Sélectionner ou Glisser votre Fichier Vidéo</span>
+                        <span className="text-[10px] text-amber-400 font-mono">Stockage Cloud Firebase</span>
                       </label>
-                      <div className="relative border-2 border-dashed border-slate-700 hover:border-amber-400/80 rounded-2xl p-6 text-center transition bg-slate-950/40">
+                      <div className={`relative border-2 border-dashed rounded-2xl p-6 text-center transition ${
+                        isUploadingFile
+                          ? 'border-amber-500 bg-amber-500/5'
+                          : 'border-slate-700 hover:border-amber-400/80 bg-slate-950/40'
+                      }`}>
                         <input
                           type="file"
                           accept="video/*"
                           onChange={handleVideoFileUpload}
-                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          disabled={isUploadingFile}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
                         />
                         <div className="space-y-2 pointer-events-none">
                           <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center mx-auto">
-                            <FileVideo className="w-6 h-6" />
+                            {isUploadingFile ? (
+                              <RotateCcw className="w-6 h-6 animate-spin text-amber-400" />
+                            ) : (
+                              <FileVideo className="w-6 h-6" />
+                            )}
                           </div>
                           <div className="text-xs font-bold text-slate-200">
-                            Cliquez pour choisir une vidéo ou glissez-la ici
+                            {isUploadingFile
+                              ? `Téléversement vers Firebase Storage... ${uploadProgress || 0}%`
+                              : 'Cliquez pour choisir une vidéo ou glissez-la ici'}
                           </div>
-                          <div className="text-[11px] text-slate-400">
-                            Formats : MP4, WebM, MOV, MKV
+                          <div className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                            Formats : MP4, WebM, MOV. Le fichier est automatiquement stocké sur Firebase Storage pour être lu directement et nativement sur l’application mobile des athlètes.
                           </div>
-                          {uploadedFileName && (
+
+                          {isUploadingFile && (
+                            <div className="mt-3 w-full max-w-xs mx-auto space-y-2">
+                              <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden border border-slate-700">
+                                <div
+                                  className="bg-gradient-to-r from-amber-500 to-amber-400 h-2.5 rounded-full transition-all duration-200"
+                                  style={{ width: `${uploadProgress || 0}%` }}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between text-[11px] text-amber-300 font-mono font-bold">
+                                <span>Progression : {uploadProgress || 0}%</span>
+                                <button
+                                  type="button"
+                                  onClick={(ev) => {
+                                    ev.preventDefault();
+                                    ev.stopPropagation();
+                                    setIsUploadingFile(false);
+                                    setUploadProgress(null);
+                                    showToast('Téléversement annulé.');
+                                  }}
+                                  className="pointer-events-auto px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 hover:bg-rose-500 hover:text-white transition cursor-pointer text-[10px]"
+                                >
+                                  Annuler
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {uploadedFileName && !isUploadingFile && (
                             <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-semibold">
                               <Check className="w-3.5 h-3.5" />
-                              <span>Fichier prêt : {uploadedFileName}</span>
+                              <span>Fichier prêt sur Firebase Storage : {uploadedFileName}</span>
                             </div>
                           )}
                         </div>
@@ -1216,6 +1471,32 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
                   </div>
                 )}
 
+                {/* Push Notification Toggle for quick save */}
+                <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                      <Bell className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="font-bold text-white block text-xs">
+                        Envoyer l'alerte Push FCM aux athlètes
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        Avertit instantanément les smartphones de la mise à jour de la vidéo et du vote.
+                      </span>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={notifyOnQuickSave}
+                      onChange={(e) => setNotifyOnQuickSave(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-600" />
+                  </label>
+                </div>
+
                 {/* Action Buttons */}
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-800">
                   <button
@@ -1243,12 +1524,14 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
                   <button
                     type="button"
                     onClick={handleSaveDailyContent}
-                    disabled={isSavingToFirestore}
+                    disabled={isSavingToFirestore || isUploadingFile}
                     className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-black shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                   >
                     <Database className="w-4 h-4" />
                     <span>
-                      {isSavingToFirestore
+                      {isUploadingFile
+                        ? `Téléversement vers Firebase Storage (${uploadProgress || 0}%)...`
+                        : isSavingToFirestore
                         ? 'Enregistrement sur Firestore...'
                         : 'Enregistrer & Mettre en Ligne (global_config/daily_content)'}
                     </span>
@@ -1997,7 +2280,20 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="font-semibold text-slate-700 block mb-1">URL de la Vidéo (YouTube / MP4 / Cloud) :</label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="font-semibold text-slate-700 block">URL de la Vidéo (YouTube / MP4 / Cloud) :</label>
+                        <label className="text-[11px] font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1 cursor-pointer">
+                          <UploadCloud className="w-3.5 h-3.5" />
+                          <span>{isModalUploading ? `Upload (${modalUploadProgress || 0}%)...` : 'Téléverser fichier'}</span>
+                          <input
+                            type="file"
+                            accept="video/*"
+                            onChange={handleModalFileUpload}
+                            disabled={isModalUploading}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
                       <input
                         type="url"
                         required
@@ -2006,6 +2302,14 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
                         onChange={(e) => setNewVideoUrl(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-mono text-xs"
                       />
+                      {isModalUploading && (
+                        <div className="mt-1.5 w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className="bg-amber-500 h-1.5 rounded-full transition-all duration-200"
+                            style={{ width: `${modalUploadProgress || 0}%` }}
+                          />
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="font-semibold text-slate-700 block mb-1">Source Vidéo :</label>

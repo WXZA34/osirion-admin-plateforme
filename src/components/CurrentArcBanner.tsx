@@ -106,7 +106,7 @@ export const getActiveArcForDate = (date: Date = new Date()): AuthenticArcData =
   return OFFICIAL_OSIRION_ARCS.winter;
 };
 
-export const CurrentArcBanner: React.FC = () => {
+export const CurrentArcBanner: React.FC<{ athletes?: any[] }> = ({ athletes = [] }) => {
   // État de l'arc actif (par défaut Royal Arc pour Septembre/Octobre)
   const [selectedArcType, setSelectedArcType] = useState<AlphaArcType>(() => {
     try {
@@ -177,7 +177,7 @@ export const CurrentArcBanner: React.FC = () => {
   };
 
   // DONNÉES SUPERVISEUR COMMUNAUTAIRE DE TOUTE L'APP (142 ATHLÈTES ACTIFS EN DIRECT)
-  const totalActiveAthletes = 142;
+  const totalActiveAthletes = athletes.length > 0 ? athletes.filter(a => a.status === 'ACTIVE').length : 142;
   const communityForceXp = 582400;
   const communityWisdomXp = 421600;
   const forcePct = 58;

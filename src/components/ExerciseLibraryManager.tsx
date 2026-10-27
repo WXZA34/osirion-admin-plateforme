@@ -62,6 +62,8 @@ import {
 import { ExerciseVideoModal, ExerciseVideoPlayer } from './ExerciseVideoModal';
 import { inferDojoMetadata } from '../utils/exerciseClassifier';
 import { DojoGuideModeSimulator } from './DojoGuideModeSimulator';
+import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '../lib/firebase';
 
 interface ExerciseLibraryManagerProps {
   exercises: ExerciseItem[];
@@ -81,7 +83,7 @@ export type ViewTab =
   | 'catalog' // Catalogue Global
   | 'dojo_simulator'; // Banc d'Essai Dojo
 
-export type RubricAxis = 'targetArea' | 'trainingType' | 'executionMode';
+export type RubricAxis = 'targetArea' | 'trainingType' | 'executionMode' | 'simulator' | 'advanced';
 
 export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
   exercises,
@@ -90,12 +92,20 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
   onUpdateExercise,
   onDeleteExercise,
 }) => {
-  const [activeViewTab, setActiveViewTab] = useState<ViewTab>('distribution_rubriques');
+  const [activeViewTab, setActiveViewTab] = useState<ViewTab>('catalog');
   const [rubricAxis, setRubricAxis] = useState<RubricAxis>('targetArea');
   const [selectedExerciseId, setSelectedExerciseId] = useState<string>(exercises[0]?.id || 'ex_pullups_pron');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>('ALL');
+  
+  // Specific filters for the Live Catalog
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogDifficulty, setCatalogDifficulty] = useState<string>('ALL');
+  const [catalogTargetArea, setCatalogTargetArea] = useState<string>('ALL');
+  const [catalogTrainingType, setCatalogTrainingType] = useState<string>('ALL');
+  const [catalogAiFilter, setCatalogAiFilter] = useState<string>('ALL');
+
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingExercise, setEditingExercise] = useState<ExerciseItem | null>(null);
   const [reassigningExercise, setReassigningExercise] = useState<ExerciseItem | null>(null);
@@ -146,6 +156,96 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
   const [formXpReward, setFormXpReward] = useState<number>(15);
   const [formUnit, setFormUnit] = useState<'reps' | 'seconds'>('reps');
   const [formAiKeyword, setFormAiKeyword] = useState<string>('pompes');
+  const [formAiEngine, setFormAiEngine] = useState<'elbow' | 'knee' | 'hip_hinge' | 'isometric' | 'explosive'>('elbow');
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const handleFileUpload = async (file: File) => {
+    // 1. Limite de taille : 100 Mo max
+    if (file.size > 100 * 1024 * 1024) {
+      setUploadError("Le fichier vidéo est trop volumineux (" + (file.size / 1024 / 1024).toFixed(1) + " Mo). Limite : 100 Mo.");
+      return;
+    }
+
+    try {
+      setIsUploadingVideo(true);
+      setUploadProgress(1); // 1% to show immediate visual feedback
+      setUploadError(null);
+
+      // Aperçu instantané local pendant le transfert
+      const localBlob = URL.createObjectURL(file);
+      setFormVideoUrl(localBlob);
+
+      // Nom nettoyé sans caractères spéciaux
+      const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const storageRef = ref(storage, `exercises/${Date.now()}_${cleanName}`);
+      const metadata = { contentType: file.type || 'video/mp4' };
+
+      // Si petit fichier (< 15 Mo), upload direct très rapide et stable sur smartphone
+      if (file.size < 15 * 1024 * 1024) {
+        setUploadProgress(35);
+        await uploadBytes(storageRef, file, metadata);
+        setUploadProgress(90);
+        const downloadUrl = await getDownloadURL(storageRef);
+        setFormVideoUrl(downloadUrl);
+        setUploadProgress(100);
+        setIsUploadingVideo(false);
+        setSyncFeedback(`Vidéo « ${file.name} » téléversée avec succès dans Firebase Storage !`);
+        setTimeout(() => setSyncFeedback(null), 4000);
+        return;
+      }
+
+      // Pour fichiers plus volumineux, uploadBytesResumable avec fallback uploadBytes automatique
+      const uploadTask = uploadBytesResumable(storageRef, file, metadata);
+
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          if (snapshot.totalBytes > 0) {
+            const progress = Math.max(1, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100));
+            setUploadProgress(progress);
+          }
+        },
+        async (error) => {
+          console.warn("Resumable upload error, attempting direct upload fallback:", error);
+          try {
+            setUploadProgress(50);
+            await uploadBytes(storageRef, file, metadata);
+            setUploadProgress(95);
+            const downloadUrl = await getDownloadURL(storageRef);
+            setFormVideoUrl(downloadUrl);
+            setUploadProgress(100);
+            setIsUploadingVideo(false);
+            setSyncFeedback(`Vidéo « ${file.name} » téléversée avec succès (mode direct) !`);
+            setTimeout(() => setSyncFeedback(null), 4000);
+          } catch (fallbackErr: any) {
+            console.error("❌ Échec total upload :", fallbackErr);
+            setUploadError("Erreur d'envoi : " + (fallbackErr?.message || error.message));
+            setIsUploadingVideo(false);
+          }
+        },
+        async () => {
+          try {
+            const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+            setFormVideoUrl(downloadUrl);
+            setUploadProgress(100);
+            setSyncFeedback(`Vidéo « ${file.name} » téléversée avec succès !`);
+            setTimeout(() => setSyncFeedback(null), 4000);
+          } catch (err: any) {
+            console.error("❌ Erreur récupération URL :", err);
+            setUploadError("Erreur lors de la génération du lien : " + err.message);
+          } finally {
+            setIsUploadingVideo(false);
+          }
+        }
+      );
+    } catch (e: any) {
+      console.error(e);
+      setUploadError("Erreur lors de l'upload : " + e.message);
+      setIsUploadingVideo(false);
+    }
+  };
 
   const muscleCategories: MuscleGroup[] = [
     'Pectoraux',
@@ -161,7 +261,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
   const handleUpdateExerciseVideo = (exerciseId: string, newVideoUrl: string) => {
     const ex = exercises.find((e) => e.id === exerciseId);
     if (!ex) return;
-    const updated: ExerciseItem = { ...ex, videoDemoUrl: newVideoUrl };
+    const updated: ExerciseItem = { ...ex, videoDemoUrl: newVideoUrl, videoUrl: newVideoUrl } as any;
     onUpdateExercise(updated);
     if (selectedVideoExercise?.id === exerciseId) {
       setSelectedVideoExercise(updated);
@@ -196,17 +296,17 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
     setTimeout(() => setSyncFeedback(null), 3000);
   };
 
-  // Quick re-assignment of execution mode (Mode)
   const handleAssignExecutionMode = (exercise: ExerciseItem, newMode: DojoExecutionMode) => {
     if (userRole !== 'superadmin') return;
-    const modeItem = DOJO_EXECUTION_MODES.find((m) => m.id === newMode);
+    const isVision = newMode === 'MODE_VISION';
     const updated: ExerciseItem = {
       ...exercise,
       executionMode: newMode,
-      aiPoseDetection: newMode === 'MODE_VISION',
+      aiPoseDetection: isVision,
+      hasAiSupport: isVision,
     };
     onUpdateExercise(updated);
-    setSyncFeedback(`« ${exercise.name} » basculé en mode « ${modeItem?.label || newMode} » !`);
+    setSyncFeedback(`« ${exercise.name} » : Support Vision IA ${isVision ? 'ACTIVÉ (Vision + Guide)' : 'DÉSACTIVÉ (Guide Seul)'} !`);
     setTimeout(() => setSyncFeedback(null), 3000);
   };
 
@@ -260,23 +360,31 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
       for (let i = 0; i < exercises.length; i++) {
         const ex = exercises[i];
         const inferred = inferDojoMetadata(ex, ex.id);
+        const isVision =
+          typeof ex.hasAiSupport === 'boolean'
+            ? ex.hasAiSupport
+            : ex.executionMode === 'MODE_VISION'
+            ? true
+            : inferred.hasAiSupport;
+
         const updated: ExerciseItem = {
           ...ex,
           targetArea: ex.targetArea || inferred.targetArea,
           trainingType: ex.trainingType || inferred.trainingType,
-          executionMode: ex.executionMode || inferred.executionMode,
+          executionMode: isVision ? 'MODE_VISION' : 'MODE_GUIDE',
           dojoMode: ex.dojoMode || inferred.dojoMode,
           movementSplit: ex.movementSplit || inferred.movementSplit,
           configProfile: ex.configProfile || inferred.configProfile,
-          hasAiSupport: typeof ex.hasAiSupport === 'boolean' ? ex.hasAiSupport : inferred.hasAiSupport,
+          aiPoseDetection: isVision,
+          hasAiSupport: isVision,
         };
         onUpdateExercise(updated);
         count++;
-        if (i % 20 === 0 || i === exercises.length - 1) {
+        if (i % 15 === 0 || i === exercises.length - 1) {
           setBatchSyncProgress(Math.round(((i + 1) / exercises.length) * 100));
         }
       }
-      setSyncFeedback(`✅ ${count} exercices classés et enregistrés dans Firestore ! Plus aucune rubrique à 0.`);
+      setSyncFeedback(`✅ ${count} exercices synchronisés et enregistrés dans Firestore (Vision IA & Mode Guide) !`);
       setTimeout(() => setSyncFeedback(null), 5000);
     } catch (err) {
       console.error('Batch sync error:', err);
@@ -328,11 +436,12 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
     setFormMaxTrunkDeviation(12);
     setFormMinTUT(0.8);
     setFormInstructions('');
-    setFormVideoUrl('https://storage.googleapis.com/osirion-videos/exercises/demo.mp4');
+    setFormVideoUrl('');
     setFormRequiredCameraAngle('profile');
     setFormXpReward(15);
     setFormUnit('reps');
     setFormAiKeyword('pompes');
+    setFormAiEngine('elbow');
     setShowAddModal(true);
   };
 
@@ -358,16 +467,31 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
     setFormMaxTrunkDeviation(ex.maxTrunkDeviationDeg);
     setFormMinTUT(ex.minTUTSeconds);
     setFormInstructions(ex.instructions);
-    setFormVideoUrl(ex.videoDemoUrl);
+    setFormVideoUrl(ex.videoDemoUrl || (ex as any).videoUrl || '');
     setFormRequiredCameraAngle(ex.requiredCameraAngle || 'profile');
     setFormXpReward(ex.xpRewardPerUnit || 15);
     setFormUnit(ex.unit || (ex.dojoMode === 'STATIC_HOLD' ? 'seconds' : 'reps'));
+    
+    // Resolve engine
+    const inferred = inferDojoMetadata(ex, ex.id);
+    const resolvedEngine = (ex.aiEngine || inferred.aiEngine || 'elbow') as any;
+    setFormAiEngine(resolvedEngine);
     setShowAddModal(true);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim()) return;
+
+    if (isUploadingVideo) {
+      alert("Veuillez patienter pendant le téléversement de la vidéo...");
+      return;
+    }
+
+    if (formVideoUrl.startsWith('blob:')) {
+      alert("La vidéo est en cours d'envoi vers Firebase Storage. Veuillez attendre quelques secondes la fin du téléversement avant d'enregistrer.");
+      return;
+    }
 
     const targetMusclesArray = formTargetMuscles
       .split(',')
@@ -378,6 +502,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
       DOJO_TARGET_AREAS.find((a) => a.id === formTargetArea)?.label || formTargetArea;
 
     if (editingExercise) {
+      const isVision = formExecutionMode === 'MODE_VISION';
       const updated: ExerciseItem = {
         ...editingExercise,
         name: formName,
@@ -392,7 +517,9 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
         configProfile: formConfigProfile,
         holdTargetSeconds: formHoldTargetSeconds,
         targetMuscles: targetMusclesArray,
-        aiPoseDetection: formExecutionMode === 'MODE_VISION' ? formAiDetection : false,
+        aiPoseDetection: isVision ? formAiDetection : false,
+        hasAiSupport: isVision,
+        aiEngine: formAiEngine,
         requiredCameraAngle: formRequiredCameraAngle,
         xpRewardPerUnit: formXpReward,
         unit: formUnit,
@@ -414,6 +541,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
         ? `sw_${sanitizedName}_${formAiKeyword}`
         : `ex_${Date.now()}`;
 
+      const isVision = formExecutionMode === 'MODE_VISION';
       const newEx: ExerciseItem = {
         id: generatedId,
         name: formName,
@@ -428,7 +556,9 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
         configProfile: formConfigProfile,
         holdTargetSeconds: formHoldTargetSeconds,
         targetMuscles: targetMusclesArray,
-        aiPoseDetection: formExecutionMode === 'MODE_VISION' ? formAiDetection : false,
+        aiPoseDetection: isVision ? formAiDetection : false,
+        hasAiSupport: isVision,
+        aiEngine: formAiEngine,
         requiredCameraAngle: formRequiredCameraAngle,
         xpRewardPerUnit: formXpReward,
         unit: formUnit,
@@ -466,6 +596,49 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
     const matchesDiff = selectedDifficulty === 'ALL' || ex.difficulty === selectedDifficulty;
     return matchesSearch && matchesDiff;
   });
+
+  // Comprehensive multi-criteria filtering for the Catalog view
+  const catalogFilteredExercises = exercises.filter((ex) => {
+    const q = (catalogSearch || searchQuery || '').trim().toLowerCase();
+    const matchesSearch =
+      !q ||
+      (ex.name || '').toLowerCase().includes(q) ||
+      (ex.instructions || '').toLowerCase().includes(q) ||
+      (ex.equipment || '').toLowerCase().includes(q) ||
+      (Array.isArray(ex.targetMuscles) && ex.targetMuscles.some((m) => (m || '').toLowerCase().includes(q)));
+
+    const matchesDiff = catalogDifficulty === 'ALL' || ex.difficulty === catalogDifficulty;
+    const matchesTarget = catalogTargetArea === 'ALL' || (ex.targetArea || 'HAUT_DU_CORPS') === catalogTargetArea;
+    const matchesType = catalogTrainingType === 'ALL' || (ex.trainingType || 'FORCE') === catalogTrainingType;
+
+    const isVision =
+      ex.hasAiSupport === true ||
+      ex.executionMode === 'MODE_VISION' ||
+      ex.aiPoseDetection === true;
+
+    const matchesAi =
+      catalogAiFilter === 'ALL' ||
+      (catalogAiFilter === 'VISION' && isVision) ||
+      (catalogAiFilter === 'GUIDE_ONLY' && !isVision);
+
+    return matchesSearch && matchesDiff && matchesTarget && matchesType && matchesAi;
+  });
+
+  const hasActiveFilters =
+    catalogSearch.trim() !== '' ||
+    catalogDifficulty !== 'ALL' ||
+    catalogTargetArea !== 'ALL' ||
+    catalogTrainingType !== 'ALL' ||
+    catalogAiFilter !== 'ALL';
+
+  const handleResetFilters = () => {
+    setCatalogSearch('');
+    setSearchQuery('');
+    setCatalogDifficulty('ALL');
+    setCatalogTargetArea('ALL');
+    setCatalogTrainingType('ALL');
+    setCatalogAiFilter('ALL');
+  };
 
   return (
     <div className="space-y-6">
@@ -540,91 +713,43 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
         </div>
       )}
 
-      {/* Navigation Tabs */}
+      {/* Navigation Tabs - 3 Espaces Clairs & Structurés */}
       <div className="flex items-center justify-between border-b border-slate-200/80 pb-1 overflow-x-auto gap-2">
-        <div className="flex items-center gap-1.5 min-w-max">
-          <button
-            onClick={() => setActiveViewTab('distribution_rubriques')}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition ${
-              activeViewTab === 'distribution_rubriques'
-                ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <FolderKanban className="w-3.5 h-3.5" />
-            <span>Rubriques Dojo Mobile (Cible, Type, Mode)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveViewTab('mode_guide_simulator')}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition ${
-              activeViewTab === 'mode_guide_simulator'
-                ? 'bg-emerald-600 text-white font-semibold shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <Compass className="w-3.5 h-3.5" />
-            <span>Simulateur Mode Guide (4 étapes & Entonnoir)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveViewTab('distribution_profiles')}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition ${
-              activeViewTab === 'distribution_profiles'
-                ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Par Profil de Tolérance (Strict / Standard)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveViewTab('distribution_modes')}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition ${
-              activeViewTab === 'distribution_modes'
-                ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <Activity className="w-3.5 h-3.5" />
-            <span>Par Mode Détection (Reps / Isométrie)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveViewTab('distribution_splits')}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition ${
-              activeViewTab === 'distribution_splits'
-                ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <Split className="w-3.5 h-3.5" />
-            <span>Par Split Musculaire</span>
-          </button>
-
+        <div className="flex items-center gap-2 min-w-max">
           <button
             onClick={() => setActiveViewTab('catalog')}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition ${
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
               activeViewTab === 'catalog'
-                ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                ? 'bg-blue-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span>Catalogue Global ({exercises.length})</span>
+            <LayoutGrid className="w-4 h-4" />
+            <span>1. 📋 Catalogue Global & Synchro Firestore ({exercises.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveViewTab('distribution_rubriques')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              activeViewTab === 'distribution_rubriques'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <FolderKanban className="w-4 h-4" />
+            <span>2. 🎯 Parcours Mobile Dojo (Cible, Type, Mode)</span>
           </button>
 
           <button
             onClick={() => setActiveViewTab('dojo_simulator')}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition ${
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
               activeViewTab === 'dojo_simulator'
-                ? 'bg-slate-900 text-white font-semibold shadow-xs'
+                ? 'bg-slate-900 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Cpu className="w-3.5 h-3.5 text-blue-400" />
-            <span>Banc d'Essai Dojo (Simulateur Caméra)</span>
+            <Cpu className="w-4 h-4 text-blue-400" />
+            <span>3. 🔬 Banc d'Essai Dojo (Simulateur Caméra)</span>
           </button>
         </div>
       </div>
@@ -649,7 +774,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
             <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200/60 shrink-0">
               <button
                 onClick={() => setRubricAxis('targetArea')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                   rubricAxis === 'targetArea'
                     ? 'bg-white text-blue-700 shadow-xs font-semibold'
                     : 'text-slate-600 hover:text-slate-900'
@@ -659,7 +784,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
               </button>
               <button
                 onClick={() => setRubricAxis('trainingType')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                   rubricAxis === 'trainingType'
                     ? 'bg-white text-blue-700 shadow-xs font-semibold'
                     : 'text-slate-600 hover:text-slate-900'
@@ -669,13 +794,33 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
               </button>
               <button
                 onClick={() => setRubricAxis('executionMode')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                   rubricAxis === 'executionMode'
                     ? 'bg-white text-blue-700 shadow-xs font-semibold'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 3. Mode d'Exécution ({DOJO_EXECUTION_MODES.length})
+              </button>
+              <button
+                onClick={() => setRubricAxis('simulator')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
+                  rubricAxis === 'simulator'
+                    ? 'bg-white text-emerald-700 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                4. Simulateur Entonnoir Mobile
+              </button>
+              <button
+                onClick={() => setRubricAxis('advanced')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
+                  rubricAxis === 'advanced'
+                    ? 'bg-white text-purple-700 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                5. Tolérances & Splits (Avancé)
               </button>
             </div>
           </div>
@@ -1000,11 +1145,24 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
           {/* AXIS 3: MODE D'EXÉCUTION (MODE VISION vs MODE GUIDE) */}
           {rubricAxis === 'executionMode' && (
             <div className="space-y-6">
-              <div className="bg-cyan-50/70 p-4 rounded-2xl border border-cyan-200/70 text-xs text-cyan-900 flex items-center justify-between">
-                <div className="flex items-center gap-2">
+              <div className="bg-gradient-to-r from-cyan-50/90 via-sky-50/90 to-indigo-50/90 p-5 rounded-2xl border border-cyan-200 text-xs text-slate-800 space-y-2.5">
+                <div className="flex items-center gap-2 font-bold text-cyan-950 text-sm">
                   <Info className="w-4 h-4 text-cyan-600 shrink-0" />
-                  <span>
-                    <strong>Écran « 3. MODE D'EXÉCUTION » du Dojo :</strong> Répartition des mouvements entre le <strong>MODE VISION</strong> (arbitrage automatique IA par détection de pose Google ML Kit) et le <strong>MODE GUIDE</strong> (simulation 3D et chronomètre libre).
+                  <span>Règle d'arbitrage Dojo : Vision IA vs Mode Guide</span>
+                </div>
+                <p className="text-slate-600 leading-relaxed text-xs">
+                  Dans l'application mobile, le <strong>MODE GUIDE</strong> donne accès à <strong>100% du catalogue ({exercises.length} exercices)</strong> sans aucun tri restrictif.<br />
+                  Le <strong>MODE VISION IA</strong> applique un filtrage automatique pour ne proposer à l'athlète que les mouvements équipés d'un modèle cinématique de détection par caméra.
+                </p>
+                <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] font-semibold">
+                  <span className="px-2.5 py-1 bg-white rounded-lg border border-cyan-200 text-cyan-800 shadow-sm">
+                    📷 Compatibles Vision IA : <strong>{exercises.filter((e) => (e.executionMode || 'MODE_VISION') === 'MODE_VISION').length}</strong> exercices
+                  </span>
+                  <span className="px-2.5 py-1 bg-white rounded-lg border border-indigo-200 text-indigo-800 shadow-sm">
+                    ⏱️ Exclusifs Mode Guide (Sans IA) : <strong>{exercises.filter((e) => e.executionMode === 'MODE_GUIDE').length}</strong> exercices
+                  </span>
+                  <span className="px-2.5 py-1 bg-white rounded-lg border border-slate-200 text-slate-700 shadow-sm">
+                    📖 Total catalogue en Mode Guide : <strong>{exercises.length}</strong> exercices (100%)
                   </span>
                 </div>
               </div>
@@ -1095,7 +1253,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                               {/* Quick Switch for Execution Mode */}
                               <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between">
                                 <span className="text-[11px] text-slate-500 font-medium">
-                                  Bascule rapide du mode :
+                                  Support Caméra IA :
                                 </span>
                                 <select
                                   disabled={userRole !== 'superadmin'}
@@ -1103,13 +1261,18 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                                   onChange={(e) =>
                                     handleAssignExecutionMode(ex, e.target.value as DojoExecutionMode)
                                   }
-                                  className="text-[11px] py-1 px-2 rounded-lg bg-white border border-slate-200 font-medium text-slate-800 hover:border-cyan-500"
+                                  className={`text-[11px] py-1 px-2 rounded-lg border font-semibold cursor-pointer transition ${
+                                    ex.executionMode === 'MODE_GUIDE'
+                                      ? 'bg-indigo-50 border-indigo-200 text-indigo-800'
+                                      : 'bg-cyan-50 border-cyan-200 text-cyan-800'
+                                  }`}
                                 >
-                                  {DOJO_EXECUTION_MODES.map((m) => (
-                                    <option key={m.id} value={m.id}>
-                                      {m.label}
-                                    </option>
-                                  ))}
+                                  <option value="MODE_VISION">
+                                    ✅ ACTIF (Vision IA + Guide)
+                                  </option>
+                                  <option value="MODE_GUIDE">
+                                    ⏱️ DÉSACTIVÉ (Guide Seul)
+                                  </option>
                                 </select>
                               </div>
                             </div>
@@ -1133,6 +1296,60 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                           </button>
                         </div>
                       )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* AXIS 4: SIMULATEUR ENTONNOIR MOBILE (MODE GUIDE) */}
+          {rubricAxis === 'simulator' && (
+            <DojoGuideModeSimulator
+              exercises={exercises}
+              onSessionComplete={(exercise, reps, duration, earnedXp) => {
+                setSyncFeedback(`Séance Mode Guide validée : +${earnedXp} XP enregistrés pour « ${exercise.name} » (${reps} reps en ${duration}s) !`);
+                setTimeout(() => setSyncFeedback(null), 4000);
+              }}
+            />
+          )}
+
+          {/* AXIS 5: CONFIGURATION AVANCÉE (PROFILS & SPLITS) */}
+          {rubricAxis === 'advanced' && (
+            <div className="space-y-6">
+              <div className="bg-purple-50/70 p-4 rounded-2xl border border-purple-200/70 text-xs text-purple-900 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-purple-600 shrink-0" />
+                  <span>
+                    <strong>Configuration Avancée :</strong> Profils de tolérance biomécanique (Strict anti-kipping / Quotidien) et répartition par split de mouvement.
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {DOJO_CONFIG_PROFILES.map((profile) => {
+                  const assignedExercises = exercises.filter((e) => (e.configProfile || 'STANDARD_DAILY') === profile.id);
+                  return (
+                    <div
+                      key={profile.id}
+                      className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-4 space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-2">
+                        <div>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${profile.badgeColor}`}>
+                            {profile.name}
+                          </span>
+                          <h4 className="font-semibold text-xs text-slate-900 mt-1">{profile.tagline}</h4>
+                        </div>
+                        <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
+                          {assignedExercises.length} exos
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">{profile.description}</p>
+                      <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                        <span>Sensibilité : {(profile.defaultSensitivity * 100).toFixed(0)}%</span>
+                        <span>Kipping : {profile.strictKippingCheck ? 'STRICT' : 'PERMISSIF'}</span>
+                      </div>
                     </div>
                   );
                 })}
@@ -1436,138 +1653,422 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
       {/* ============================================================== */}
       {/* VUE 4 : CATALOGUE GLOBAL & RECHERCHE                           */}
       {/* ============================================================== */}
+      {/* ============================================================== */}
+      {/* VUE 1 : CATALOGUE GLOBAL & SYNCHRONISATION FIRESTORE EN DIRECT */}
+      {/* ============================================================== */}
       {activeViewTab === 'catalog' && (
         <div className="space-y-6">
-          {/* Search & Filters */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="relative w-full sm:w-80">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Rechercher par nom, muscle..."
-                className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
-              />
+          {/* Firestore Live Synchronization Header */}
+          <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-6 rounded-2xl border border-slate-800 shadow-lg space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2.5">
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                  </span>
+                  <h3 className="text-base font-bold text-white tracking-wide flex items-center gap-2">
+                    <span>Synchronisation Firestore en Direct</span>
+                    <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      {exercises.length} mouvements connectés
+                    </span>
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                  Chaque modification effectuée ici (activation de la caméra Vision IA, changement de rubrique ou de paramètres d'angle) est <strong>immédiatement enregistrée dans Firestore</strong> et propagée en temps réel vers les smartphones des utilisateurs.
+                </p>
+              </div>
+
+              {userRole === 'superadmin' && (
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                  <button
+                    onClick={handleBatchSyncDojoClassification}
+                    disabled={isBatchSyncing}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md transition disabled:opacity-50 cursor-pointer"
+                    title="Sauvegarder explicitement tous les champs (hasAiSupport, targetArea, trainingType) dans Firestore"
+                  >
+                    <Database className="w-4 h-4 text-indigo-200" />
+                    <span>
+                      {isBatchSyncing
+                        ? `Sauvegarde Firestore (${batchSyncProgress || 0}%)...`
+                        : `☁️ Pousser tout vers Firestore (${exercises.length})`}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={handleOpenAdd}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md transition cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>➕ Nouvel Exercice</span>
+                  </button>
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <select
-                value={selectedDifficulty}
-                onChange={(e) => setSelectedDifficulty(e.target.value)}
-                className="text-xs py-2 px-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 font-medium"
-              >
-                <option value="ALL">Tous les niveaux</option>
-                <option value="Débutant">Débutant</option>
-                <option value="Intermédiaire">Intermédiaire</option>
-                <option value="Avancé">Avancé</option>
-                <option value="Élite">Élite</option>
-              </select>
+            {/* 4 Stats Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
+              <div className="bg-slate-800/70 border border-slate-700/80 rounded-xl p-3 space-y-1">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
+                  Catalogue Total
+                </span>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-xl font-bold font-mono text-white">{exercises.length}</span>
+                  <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/60">
+                    100% en Mode Guide
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400">Accessible avec chrono guidé & démo</p>
+              </div>
+
+              <div className="bg-slate-800/70 border border-cyan-800/50 rounded-xl p-3 space-y-1">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-300 block">
+                  Vision IA Caméra
+                </span>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-xl font-bold font-mono text-cyan-300">
+                    {exercises.filter((e) => e.hasAiSupport === true || e.executionMode === 'MODE_VISION' || e.aiPoseDetection === true).length}
+                  </span>
+                  <span className="text-[10px] text-cyan-300 font-semibold bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-800/60">
+                    Google ML Kit
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400">Tracking articulaire actif</p>
+              </div>
+
+              <div className="bg-slate-800/70 border border-amber-800/50 rounded-xl p-3 space-y-1">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-amber-300 block">
+                  Exclusif Guide Seul
+                </span>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-xl font-bold font-mono text-amber-300">
+                    {exercises.filter((e) => !(e.hasAiSupport === true || e.executionMode === 'MODE_VISION' || e.aiPoseDetection === true)).length}
+                  </span>
+                  <span className="text-[10px] text-amber-300 font-semibold bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/60">
+                    Sans Caméra
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400">Masqués en Vision IA, visibles en Guide</p>
+              </div>
+
+              <div className="bg-slate-800/70 border border-emerald-800/50 rounded-xl p-3 space-y-1">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-300 block">
+                  Liaison Firestore
+                </span>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-sm font-bold text-emerald-300 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    Temps Réel
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/60">
+                    onSnapshot
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400">Synchro automatique bidirectionnelle</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Search & Multi-Filters Bar */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+              {/* Text Search */}
+              <div className="md:col-span-4 relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={catalogSearch}
+                  onChange={(e) => setCatalogSearch(e.target.value)}
+                  placeholder="Rechercher par nom, muscle, équipement..."
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* Filter Cible */}
+              <div className="md:col-span-2">
+                <select
+                  value={catalogTargetArea}
+                  onChange={(e) => setCatalogTargetArea(e.target.value)}
+                  className="w-full text-xs py-2 px-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 font-medium"
+                >
+                  <option value="ALL">🎯 Toutes les Cibles</option>
+                  {DOJO_TARGET_AREAS.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filter Type */}
+              <div className="md:col-span-2">
+                <select
+                  value={catalogTrainingType}
+                  onChange={(e) => setCatalogTrainingType(e.target.value)}
+                  className="w-full text-xs py-2 px-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 font-medium"
+                >
+                  <option value="ALL">⚡ Tous les Types</option>
+                  {DOJO_TRAINING_TYPES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filter Mode Vision IA / Guide */}
+              <div className="md:col-span-2">
+                <select
+                  value={catalogAiFilter}
+                  onChange={(e) => setCatalogAiFilter(e.target.value)}
+                  className="w-full text-xs py-2 px-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 font-semibold"
+                >
+                  <option value="ALL">🔄 Tous les Modes</option>
+                  <option value="VISION">📷 Vision IA Active (+ Guide)</option>
+                  <option value="GUIDE_ONLY">⏱️ Guide Seul (Sans Caméra)</option>
+                </select>
+              </div>
+
+              {/* Filter Difficulté */}
+              <div className="md:col-span-2">
+                <select
+                  value={catalogDifficulty}
+                  onChange={(e) => setCatalogDifficulty(e.target.value)}
+                  className="w-full text-xs py-2 px-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 font-medium"
+                >
+                  <option value="ALL">⭐ Tous niveaux</option>
+                  <option value="Débutant">Débutant</option>
+                  <option value="Intermédiaire">Intermédiaire</option>
+                  <option value="Avancé">Avancé</option>
+                  <option value="Élite">Élite</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Filter Summary & Quick Reset */}
+            <div className="flex flex-wrap items-center justify-between text-xs pt-1 border-t border-slate-100">
+              <span className="text-slate-500 font-medium">
+                Affichage de <strong>{catalogFilteredExercises.length}</strong> sur <strong>{exercises.length}</strong> mouvements
+              </span>
+              {hasActiveFilters && (
+                <button
+                  onClick={handleResetFilters}
+                  className="text-blue-600 hover:text-blue-800 font-semibold text-xs flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Réinitialiser les filtres</span>
+                </button>
+              )}
             </div>
           </div>
 
           {/* Cards Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {filteredExercises.map((ex) => (
-              <div
-                key={ex.id}
-                className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-5 space-y-4 hover:shadow-md transition flex flex-col justify-between"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 uppercase">
-                        {ex.category}
+            {catalogFilteredExercises.map((ex) => {
+              const isVision =
+                ex.hasAiSupport === true ||
+                ex.executionMode === 'MODE_VISION' ||
+                ex.aiPoseDetection === true;
+
+              return (
+                <div
+                  key={ex.id}
+                  className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-5 space-y-4 hover:shadow-md transition flex flex-col justify-between"
+                >
+                  <div className="space-y-3">
+                    {/* Header: Category & Difficulty */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 uppercase">
+                          {ex.category}
+                        </span>
+                        <h3 className="font-semibold text-slate-900 text-sm mt-1">{ex.name}</h3>
+                      </div>
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700">
+                        {ex.difficulty}
                       </span>
-                      <h3 className="font-semibold text-slate-900 text-sm mt-1">{ex.name}</h3>
                     </div>
-                    <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700">
-                      {ex.difficulty}
-                    </span>
-                  </div>
 
-                  <div className="flex flex-wrap gap-1.5">
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">
-                      Cible : {DOJO_TARGET_AREAS.find((a) => a.id === ex.targetArea)?.label || ex.targetArea}
-                    </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-medium border border-indigo-200">
-                      Type : {ex.trainingType === 'ENDURANCE' ? 'Endurance' : 'Force'}
-                    </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700 font-medium border border-cyan-200">
-                      {ex.executionMode === 'MODE_GUIDE' ? 'Mode Guide 3D' : 'Mode Vision IA'}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-slate-500 line-clamp-2">{ex.instructions}</p>
-
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1 text-[11px] text-slate-500">
-                    <div className="flex justify-between">
-                      <span>Équipement requis :</span>
-                      <strong className="text-slate-700">{ex.equipment}</strong>
+                    {/* Funnel Badges */}
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">
+                        Cible : {DOJO_TARGET_AREAS.find((a) => a.id === ex.targetArea)?.label || ex.targetArea}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-medium border border-indigo-200">
+                        Type : {ex.trainingType === 'ENDURANCE' ? 'Endurance' : 'Force'}
+                      </span>
                     </div>
-                    <div className="flex justify-between">
-                      <span>Angles articulaires :</span>
-                      <strong className="text-slate-700">
-                        {ex.minAngle}° (inflexion) → {ex.maxAngle}° (extension)
-                      </strong>
+
+                    {/* Interactive 1-Click Vision IA Toggle Button */}
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        disabled={userRole !== 'superadmin'}
+                        onClick={() => handleAssignExecutionMode(ex, isVision ? 'MODE_GUIDE' : 'MODE_VISION')}
+                        className={`w-full p-2.5 rounded-xl border text-left transition cursor-pointer flex items-center justify-between ${
+                          isVision
+                            ? 'bg-gradient-to-r from-cyan-50/90 to-blue-50/80 border-cyan-200 text-cyan-900 hover:border-cyan-300'
+                            : 'bg-gradient-to-r from-amber-50/90 to-slate-50 border-amber-200 text-amber-900 hover:border-amber-300'
+                        }`}
+                        title={
+                          isVision
+                            ? 'Cliquez pour désactiver la caméra (réservé au Guide Seul)'
+                            : 'Cliquez pour activer le tracking caméra Vision IA'
+                        }
+                      >
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                              isVision ? 'bg-cyan-600 text-white' : 'bg-amber-500 text-white'
+                            }`}
+                          >
+                            {isVision ? <Camera className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-bold">
+                                {isVision ? 'Vision IA Caméra' : 'Mode Guide Seul'}
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
+                                  isVision
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-slate-200 text-slate-700'
+                                }`}
+                              >
+                                {isVision ? 'ACTIVÉ' : 'SANS IA'}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-500 block">
+                              {isVision
+                                ? 'Visible en Vision IA & en Mode Guide'
+                                : 'Masqué en Vision IA, visible en Guide'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {userRole === 'superadmin' && (
+                          <span className="text-[10px] text-blue-600 font-semibold underline shrink-0">
+                            Changer
+                          </span>
+                        )}
+                      </button>
+                    </div>
+
+                    <p className="text-xs text-slate-500 line-clamp-2">{ex.instructions}</p>
+
+                    {/* Quick Reclassification Dropdowns directly on card */}
+                    {userRole === 'superadmin' && (
+                      <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                        <div>
+                          <label className="text-[10px] text-slate-400 font-medium block mb-0.5">
+                            Cible Dojo :
+                          </label>
+                          <select
+                            value={ex.targetArea || 'HAUT_DU_CORPS'}
+                            onChange={(e) => handleAssignTargetArea(ex, e.target.value as DojoTargetArea)}
+                            className="w-full text-[11px] py-1 px-1.5 rounded-lg bg-slate-50 border border-slate-200 font-medium text-slate-800"
+                          >
+                            {DOJO_TARGET_AREAS.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-slate-400 font-medium block mb-0.5">
+                            Type Séance :
+                          </label>
+                          <select
+                            value={ex.trainingType || 'FORCE'}
+                            onChange={(e) => handleAssignTrainingType(ex, e.target.value as DojoTrainingType)}
+                            className="w-full text-[11px] py-1 px-1.5 rounded-lg bg-slate-50 border border-slate-200 font-medium text-slate-800"
+                          >
+                            {DOJO_TRAINING_TYPES.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Biomechanical Box */}
+                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1 text-[11px] text-slate-500">
+                      <div className="flex justify-between">
+                        <span>Équipement requis :</span>
+                        <strong className="text-slate-700">{ex.equipment}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Angles articulaires :</span>
+                        <strong className="text-slate-700">
+                          {ex.minAngle}° (inflexion) → {ex.maxAngle}° (extension)
+                        </strong>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => {
-                        setSelectedExerciseId(ex.id);
-                        setActiveViewTab('dojo_simulator');
-                      }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition"
-                    >
-                      <Play className="w-3.5 h-3.5 text-blue-400" />
-                      <span>Tester</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setSelectedVideoExercise(ex);
-                        setIsVideoModalOpen(true);
-                      }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold transition"
-                    >
-                      <Video className="w-3.5 h-3.5 text-rose-600" />
-                      <span>Vidéo</span>
-                    </button>
-                  </div>
-
-                  {userRole === 'superadmin' && (
+                  {/* Actions Footer */}
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5">
                       <button
-                        onClick={() => setReassigningExercise(ex)}
-                        className="px-2.5 py-1.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-medium transition"
+                        onClick={() => {
+                          setSelectedExerciseId(ex.id);
+                          setActiveViewTab('dojo_simulator');
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition cursor-pointer"
                       >
-                        Ranger
+                        <Play className="w-3.5 h-3.5 text-blue-400" />
+                        <span>Tester</span>
                       </button>
-                      <button
-                        onClick={() => handleOpenEdit(ex)}
-                        className="p-1.5 rounded-xl border border-slate-200 text-slate-600 hover:text-blue-600 hover:bg-blue-50 transition"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
+
                       <button
                         onClick={() => {
-                          if (confirm(`Supprimer « ${ex.name} » ?`)) {
-                            onDeleteExercise(ex.id);
-                          }
+                          setSelectedVideoExercise(ex);
+                          setIsVideoModalOpen(true);
                         }}
-                        className="p-1.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 transition"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold transition cursor-pointer"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Video className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Vidéo</span>
                       </button>
                     </div>
-                  )}
+
+                    {userRole === 'superadmin' && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setReassigningExercise(ex)}
+                          className="px-2.5 py-1.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-medium transition cursor-pointer"
+                        >
+                          Ranger
+                        </button>
+                        <button
+                          onClick={() => handleOpenEdit(ex)}
+                          className="p-1.5 rounded-xl border border-slate-200 text-slate-600 hover:text-blue-600 hover:bg-blue-50 transition cursor-pointer"
+                          title="Modifier"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Supprimer « ${ex.name} » ?`)) {
+                              onDeleteExercise(ex.id);
+                            }
+                          }}
+                          className="p-1.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                          title="Supprimer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -1717,7 +2218,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                 {simulatorShowVideoSplit && currentDojoExercise && (
                   <div className="relative aspect-video rounded-xl overflow-hidden border border-slate-800 bg-black flex flex-col justify-center">
                     <ExerciseVideoPlayer
-                      url={currentDojoExercise.videoDemoUrl}
+                      url={currentDojoExercise.videoDemoUrl || (currentDojoExercise as any).videoUrl || ''}
                       exercise={currentDojoExercise}
                       showKinematicOverlay={true}
                       autoPlay={true}
@@ -2051,33 +2552,59 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                       />
                     </div>
 
-                    <label className="cursor-pointer px-3 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition shrink-0 w-full sm:w-auto">
-                      <Upload className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Importer un fichier (.mp4)</span>
-                      <input
-                        type="file"
-                        accept="video/mp4,video/webm,video/quicktime,video/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            const localUrl = URL.createObjectURL(file);
-                            setFormVideoUrl(localUrl);
-                          }
-                        }}
-                      />
-                    </label>
+                    <div className="flex flex-col gap-1 w-full sm:w-auto">
+                      <label className={`cursor-pointer px-3 py-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition shrink-0 w-full sm:w-auto ${
+                        isUploadingVideo 
+                          ? 'bg-blue-50 border-blue-300 text-blue-700' 
+                          : 'bg-white border-slate-200 hover:bg-slate-100 text-slate-700'
+                      }`}>
+                        <Upload className={`w-3.5 h-3.5 ${isUploadingVideo ? 'animate-bounce text-blue-600' : 'text-blue-600'}`} />
+                        <span>{isUploadingVideo ? `Envoi en cours (${uploadProgress}%)...` : 'Importer un fichier (.mp4)'}</span>
+                        <input
+                          type="file"
+                          accept="video/mp4,video/webm,video/quicktime,video/*"
+                          className="hidden"
+                          disabled={isUploadingVideo}
+                          onClick={(e) => {
+                            (e.target as HTMLInputElement).value = '';
+                          }}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              handleFileUpload(file);
+                            }
+                          }}
+                        />
+                      </label>
+                      {isUploadingVideo && (
+                        <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                          <div 
+                            className="bg-blue-600 h-1.5 rounded-full transition-all duration-300" 
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                      )}
+                      {uploadError && (
+                        <span className="text-[10px] text-red-600 font-medium">
+                          {uploadError}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Suggestions rapides calisthénie */}
                   <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                     <span className="text-[10px] text-slate-400 font-medium">Exemples rapides :</span>
                     {[
-                      { name: 'Pompes HD', url: 'https://www.youtube.com/watch?v=IODxDxX7oi4' },
-                      { name: 'Tractions HD', url: 'https://www.youtube.com/watch?v=eGo4IYlbE5g' },
-                      { name: 'Dips HD', url: 'https://www.youtube.com/watch?v=2z8JmcrW-As' },
-                      { name: 'Muscle-Up HD', url: 'https://www.youtube.com/watch?v=yW63V6XbKvg' },
-                      { name: 'Pistol Squat HD', url: 'https://www.youtube.com/watch?v=qDcniqddTeE' },
+                      { name: 'Pompes (Storage)', url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fupper%2Fpompes.mp4?alt=media' },
+                      { name: 'Tractions (Storage)', url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fupper%2Ftractions.mp4?alt=media' },
+                      { name: 'Dips (Storage)', url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fupper%2Fdips.mp4?alt=media' },
+                      { name: 'Abdos Vélo (Storage)', url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fcore%2Fabdos_velo.mp4?alt=media' },
+                      { name: 'Burpees (Storage)', url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Ffull_body%2Fburpees.mp4?alt=media' },
+                      { name: 'L-Sit (Storage)', url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fcore%2Flsit.mp4?alt=media' },
+                      { name: 'Pompes HD (YT)', url: 'https://www.youtube.com/watch?v=IODxDxX7oi4' },
+                      { name: 'Tractions HD (YT)', url: 'https://www.youtube.com/watch?v=eGo4IYlbE5g' },
+                      { name: 'Dips HD (YT)', url: 'https://www.youtube.com/watch?v=2z8JmcrW-As' },
                     ].map((item) => (
                       <button
                         key={item.name}
@@ -2114,14 +2641,32 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                   Paramètres Kinématiques Google ML Kit Pose Detection
                 </span>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {/* AI Engine Selector */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Moteur Biomécanique IA (ML Kit) *
+                  </label>
+                  <select
+                    value={formAiEngine}
+                    onChange={(e) => setFormAiEngine(e.target.value as any)}
+                    className="w-full px-2.5 py-2 text-xs rounded-lg bg-white border border-slate-300 font-semibold text-slate-800"
+                  >
+                    <option value="elbow">💪 Coudes (Pompes, Tractions, Dips, Muscle-Ups)</option>
+                    <option value="knee">🦵 Genoux (Squats, Fentes, Pistol Squats)</option>
+                    <option value="hip_hinge">⚡ Hanches & Bassin (Deadlift, Relevés de bassin)</option>
+                    <option value="isometric">⏱️ Isométrie & Gainage (Planche, Chaise, L-Sit, Hollow)</option>
+                    <option value="explosive">🚀 Plyométrie & Sauts (Burpees, Jump Squats)</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-[11px] text-slate-600 mb-1">Angle min (flexion)</label>
                     <input
                       type="number"
                       value={formMinAngle}
                       onChange={(e) => setFormMinAngle(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200"
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200 font-mono"
                     />
                   </div>
 
@@ -2131,7 +2676,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                       type="number"
                       value={formMaxAngle}
                       onChange={(e) => setFormMaxAngle(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200"
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200 font-mono"
                     />
                   </div>
 
@@ -2144,7 +2689,7 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                       max="1.0"
                       value={formSensitivity}
                       onChange={(e) => setFormSensitivity(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200"
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200 font-mono"
                     />
                   </div>
 
@@ -2155,8 +2700,32 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                       step="0.1"
                       value={formMinTUT}
                       onChange={(e) => setFormMinTUT(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200"
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200 font-mono"
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-600 mb-1">Angle Caméra Requis</label>
+                    <select
+                      value={formRequiredCameraAngle}
+                      onChange={(e) => setFormRequiredCameraAngle(e.target.value as 'profile' | 'face')}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200"
+                    >
+                      <option value="profile">Vue Profil</option>
+                      <option value="face">Vue Face</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-600 mb-1">Anti-Kipping (Triche)</label>
+                    <select
+                      value={formStrictMode ? 'strict' : 'permissive'}
+                      onChange={(e) => setFormStrictMode(e.target.value === 'strict')}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white border border-slate-200"
+                    >
+                      <option value="strict">Strict (anti-kipping actif)</option>
+                      <option value="permissive">Permissif</option>
+                    </select>
                   </div>
                 </div>
               </div>
@@ -2172,9 +2741,17 @@ export const ExerciseLibraryManager: React.FC<ExerciseLibraryManagerProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition"
+                  disabled={isUploadingVideo}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
                 >
-                  {editingExercise ? 'Enregistrer les modifications' : 'Créer et ranger l’exercice'}
+                  {isUploadingVideo ? (
+                    <>
+                      <Upload className="w-3.5 h-3.5 animate-bounce" />
+                      <span>Téléversement ({uploadProgress}%)...</span>
+                    </>
+                  ) : (
+                    <span>{editingExercise ? 'Enregistrer les modifications' : 'Créer et ranger l’exercice'}</span>
+                  )}
                 </button>
               </div>
             </form>

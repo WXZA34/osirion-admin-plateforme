@@ -27,7 +27,8 @@ import {
 } from 'lucide-react';
 import { ExerciseItem, DojoTargetArea } from '../types/admin';
 import { DOJO_TARGET_AREAS } from '../data/mockData';
-
+import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '../lib/firebase';
 export interface VideoInfo {
   type: 'youtube' | 'vimeo' | 'direct' | 'empty';
   embedUrl?: string;
@@ -66,10 +67,30 @@ export function parseVideoUrl(url?: string): VideoInfo {
     };
   }
 
+  // Support direct des chemins Firebase Storage (ex: "exercises/core/abdos_velo.mp4" ou "gs://...")
+  let direct = trimmed;
+  if (direct.startsWith('gs://')) {
+    const clean = direct.replace(/^gs:\/\/[^/]+\//, '');
+    try {
+      const decoded = decodeURIComponent(clean);
+      direct = `https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/${encodeURIComponent(decoded)}?alt=media`;
+    } catch {
+      direct = `https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/${encodeURIComponent(clean)}?alt=media`;
+    }
+  } else if (!direct.startsWith('http://') && !direct.startsWith('https://') && !direct.startsWith('blob:') && !direct.startsWith('data:')) {
+    const clean = direct.replace(/^\//, '');
+    try {
+      const decoded = decodeURIComponent(clean);
+      direct = `https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/${encodeURIComponent(decoded)}?alt=media`;
+    } catch {
+      direct = `https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/${encodeURIComponent(clean)}?alt=media`;
+    }
+  }
+
   // Otherwise direct video (MP4, WebM, Blob, Data URL, Cloud Storage CDN)
   return {
     type: 'direct',
-    directUrl: trimmed,
+    directUrl: direct,
     rawUrl: trimmed,
   };
 }
@@ -92,12 +113,19 @@ export const ExerciseVideoPlayer: React.FC<VideoPlayerProps> = ({
   exercise,
 }) => {
   const videoInfo = parseVideoUrl(url);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(autoPlay);
   const [isMuted, setIsMuted] = useState(true);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [isLooping, setIsLooping] = useState(loop);
   const [loadError, setLoadError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Réinitialise l'erreur dès que l'URL change
+  useEffect(() => {
+    setLoadError(false);
+    setErrorMessage(null);
+  }, [url]);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -108,7 +136,9 @@ export const ExerciseVideoPlayer: React.FC<VideoPlayerProps> = ({
   const togglePlay = () => {
     if (!videoRef.current) return;
     if (videoRef.current.paused) {
-      videoRef.current.play();
+      videoRef.current.play().catch((err) => {
+        console.warn("Play interrupted or blocked:", err);
+      });
       setIsPlaying(true);
     } else {
       videoRef.current.pause();
@@ -173,36 +203,83 @@ export const ExerciseVideoPlayer: React.FC<VideoPlayerProps> = ({
     );
   }
 
+  const isBlob = videoInfo.directUrl?.startsWith('blob:');
+
   // Direct Video (HTML5)
   return (
     <div className={`relative group overflow-hidden rounded-2xl bg-slate-950 shadow-md ${className}`}>
       {loadError ? (
-        <div className="flex flex-col items-center justify-center p-8 text-center text-slate-400 aspect-video">
+        <div className="flex flex-col items-center justify-center p-6 text-center text-slate-400 aspect-video">
           <AlertCircle className="w-10 h-10 text-amber-500 mb-2" />
-          <p className="text-xs font-semibold text-slate-200">Impossible de charger le flux vidéo direct</p>
-          <p className="text-[11px] text-slate-500 mt-1 max-w-xs">
-            Le fichier est soit restreint en accès CORS, soit le format n'est pas supporté. Vous pouvez utiliser un lien YouTube ou importer un fichier local.
+          <p className="text-xs font-semibold text-slate-200">
+            {isBlob
+              ? 'Fichier vidéo sélectionné'
+              : 'Impossible de charger le flux vidéo direct'}
           </p>
-          <a
-            href={videoInfo.directUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-3 inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 font-medium"
-          >
-            <span>Ouvrir le flux directement</span>
-            <ExternalLink className="w-3 h-3" />
-          </a>
+          <p className="text-[11px] text-slate-400 mt-1 max-w-sm leading-relaxed">
+            {isBlob
+              ? 'Le format de votre téléphone (ex: 4K / HEVC natif) ne peut pas être prévisualisé directement par le navigateur web mobile, mais le fichier sera parfaitement lisible par le moteur vidéo natif de l\'application mobile Flutter une fois enregistré.'
+              : (errorMessage || 'Le flux direct ne peut être lu par ce navigateur (CORS ou codec non pris en charge). Vous pouvez vérifier le lien ou utiliser un lien YouTube/Storage.')}
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-2 mt-3">
+            <button
+              type="button"
+              onClick={() => {
+                setLoadError(false);
+                setErrorMessage(null);
+                if (videoRef.current) {
+                  videoRef.current.load();
+                  videoRef.current.play().catch(() => {});
+                }
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-medium transition cursor-pointer"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Réessayer la lecture</span>
+            </button>
+            {videoInfo.directUrl && !isBlob && (
+              <a
+                href={videoInfo.directUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 text-xs font-medium transition"
+              >
+                <span>Ouvrir dans un nouvel onglet</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
+          </div>
         </div>
       ) : (
         <div className="relative aspect-video flex items-center justify-center bg-black">
           <video
-            ref={videoRef}
+            ref={(el) => {
+              videoRef.current = el;
+              if (el) {
+                el.muted = isMuted;
+              }
+            }}
             src={videoInfo.directUrl}
             autoPlay={autoPlay}
             loop={isLooping}
             muted={isMuted}
             playsInline
-            onError={() => setLoadError(true)}
+            preload="metadata"
+            crossOrigin="anonymous"
+            onError={(e) => {
+              const err = e.currentTarget.error;
+              console.warn("Video playback issue:", err?.code, err?.message);
+              if (err && err.code !== 1) {
+                setLoadError(true);
+                setErrorMessage(
+                  err.code === 3
+                    ? 'Décodage vidéo impossible sur ce navigateur (format de compression HEVC non supporté).'
+                    : err.code === 4
+                    ? 'Format ou source non supportée par votre navigateur.'
+                    : 'Erreur réseau ou restriction de lecture.'
+                );
+              }
+            }}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             className="w-full h-full object-contain"
@@ -228,7 +305,7 @@ export const ExerciseVideoPlayer: React.FC<VideoPlayerProps> = ({
               <button
                 type="button"
                 onClick={togglePlay}
-                className="w-8 h-8 rounded-lg bg-white/20 hover:bg-white/30 text-white flex items-center justify-center backdrop-blur-xs transition"
+                className="w-8 h-8 rounded-lg bg-white/20 hover:bg-white/30 text-white flex items-center justify-center backdrop-blur-xs transition cursor-pointer"
               >
                 {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
               </button>
@@ -236,7 +313,7 @@ export const ExerciseVideoPlayer: React.FC<VideoPlayerProps> = ({
               <button
                 type="button"
                 onClick={toggleMute}
-                className="w-8 h-8 rounded-lg bg-white/20 hover:bg-white/30 text-white flex items-center justify-center backdrop-blur-xs transition"
+                className="w-8 h-8 rounded-lg bg-white/20 hover:bg-white/30 text-white flex items-center justify-center backdrop-blur-xs transition cursor-pointer"
               >
                 {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
               </button>
@@ -309,14 +386,18 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
   const [isEditingVideo, setIsEditingVideo] = useState(false);
   const [videoInputUrl, setVideoInputUrl] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (exercise) {
-      setVideoInputUrl(exercise.videoDemoUrl || '');
-      setIsEditingVideo(false);
+      const initialUrl = exercise.videoDemoUrl || (exercise as any).videoUrl || '';
+      setVideoInputUrl(initialUrl);
+      // Ouvre automatiquement l'éditeur si aucune vidéo n'est configurée
+      setIsEditingVideo(!initialUrl);
       setUploadFeedback(null);
+      setUploadProgress(0);
     }
   }, [exercise]);
 
@@ -327,28 +408,134 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
   const handleSaveVideoUrl = (urlToSave?: string) => {
     const finalUrl = (urlToSave !== undefined ? urlToSave : videoInputUrl).trim();
     if (!finalUrl) return;
+    if (finalUrl.startsWith('blob:')) {
+      setUploadFeedback("Veuillez attendre la fin du téléversement vers Firebase Storage avant d'enregistrer.");
+      return;
+    }
     onUpdateExerciseVideo(exercise.id, finalUrl);
     setUploadFeedback('Vidéo associée et synchronisée avec succès !');
     setIsEditingVideo(false);
     setTimeout(() => setUploadFeedback(null), 3500);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setIsUploading(true);
-    // Create direct local blob URL for immediate preview and testing
-    const localVideoUrl = URL.createObjectURL(file);
-    setVideoInputUrl(localVideoUrl);
-    handleSaveVideoUrl(localVideoUrl);
-    setIsUploading(false);
-    setUploadFeedback(`Fichier « ${file.name} » chargé et attaché à l'exercice !`);
-    setTimeout(() => setUploadFeedback(null), 4000);
+    if (file.size > 100 * 1024 * 1024) {
+      alert("Le fichier vidéo est trop volumineux (" + (file.size / 1024 / 1024).toFixed(1) + " Mo). Limite : 100 Mo.");
+      return;
+    }
+
+    try {
+      setIsUploading(true);
+      setUploadProgress(1);
+      
+      // Aperçu local immédiat pendant l'envoi
+      const localBlob = URL.createObjectURL(file);
+      setVideoInputUrl(localBlob);
+
+      const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const storageRef = ref(storage, `exercises/${Date.now()}_${cleanName}`);
+      const metadata = { contentType: file.type || 'video/mp4' };
+      setUploadFeedback(`Téléversement de « ${file.name} » vers Firebase Storage en cours...`);
+
+      // Pour les fichiers de moins de 15 Mo, upload direct ultra stable et rapide
+      if (file.size < 15 * 1024 * 1024) {
+        setUploadProgress(35);
+        await uploadBytes(storageRef, file, metadata);
+        setUploadProgress(90);
+        const downloadUrl = await getDownloadURL(storageRef);
+        setVideoInputUrl(downloadUrl);
+        handleSaveVideoUrl(downloadUrl);
+        setUploadProgress(100);
+        setUploadFeedback(`Fichier vidéo chargé et synchronisé avec succès !`);
+        setIsUploading(false);
+        setTimeout(() => setUploadFeedback(null), 4000);
+        return;
+      }
+
+      // Pour fichiers plus volumineux, resumable avec fallback direct automatique
+      const uploadTask = uploadBytesResumable(storageRef, file, metadata);
+
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          if (snapshot.totalBytes > 0) {
+            const progress = Math.max(1, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100));
+            setUploadProgress(progress);
+            setUploadFeedback(`Téléversement : ${progress}%...`);
+          }
+        },
+        async (error) => {
+          console.warn("Resumable upload error, attempting direct upload fallback:", error);
+          try {
+            setUploadFeedback('Transfert en mode direct...');
+            setUploadProgress(50);
+            await uploadBytes(storageRef, file, metadata);
+            setUploadProgress(95);
+            const downloadUrl = await getDownloadURL(storageRef);
+            setVideoInputUrl(downloadUrl);
+            handleSaveVideoUrl(downloadUrl);
+            setUploadProgress(100);
+            setUploadFeedback(`Vidéo téléversée avec succès (mode direct) !`);
+          } catch (fallbackErr: any) {
+            console.error("❌ Échec total upload :", fallbackErr);
+            setUploadFeedback(`Erreur lors de l'envoi : ${fallbackErr?.message || error.message}`);
+          } finally {
+            setIsUploading(false);
+            setTimeout(() => setUploadFeedback(null), 5000);
+          }
+        },
+        async () => {
+          try {
+            const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+            setVideoInputUrl(downloadUrl);
+            handleSaveVideoUrl(downloadUrl);
+            setUploadProgress(100);
+            setUploadFeedback(`Fichier vidéo chargé et synchronisé avec succès !`);
+          } catch (err: any) {
+            setUploadFeedback(`Erreur génération URL : ${err.message}`);
+          } finally {
+            setIsUploading(false);
+            setTimeout(() => setUploadFeedback(null), 4000);
+          }
+        }
+      );
+    } catch (error: any) {
+      console.error(error);
+      setUploadFeedback('Erreur lors de l\'envoi de la vidéo : ' + error.message);
+      setIsUploading(false);
+      setTimeout(() => setUploadFeedback(null), 4000);
+    }
   };
 
-  // Curated verified calisthenics tutorials / demo links
+  // Presets vérifiés calisthénie (Firebase Storage Valerion + YouTube HD)
   const samplePresets = [
+    {
+      label: 'Pompes (Storage)',
+      url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fupper%2Fpompes.mp4?alt=media',
+    },
+    {
+      label: 'Tractions (Storage)',
+      url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fupper%2Ftractions.mp4?alt=media',
+    },
+    {
+      label: 'Dips (Storage)',
+      url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fupper%2Fdips.mp4?alt=media',
+    },
+    {
+      label: 'Abdos Vélo (Storage)',
+      url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fcore%2Fabdos_velo.mp4?alt=media',
+    },
+    {
+      label: 'L-Sit (Storage)',
+      url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Fcore%2Flsit.mp4?alt=media',
+    },
+    {
+      label: 'Burpees (Storage)',
+      url: 'https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/exercises%2Ffull_body%2Fburpees.mp4?alt=media',
+    },
     {
       label: 'Pompes Standard (YouTube HD)',
       url: 'https://www.youtube.com/watch?v=IODxDxX7oi4',
@@ -358,16 +545,8 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
       url: 'https://www.youtube.com/watch?v=eGo4IYlbE5g',
     },
     {
-      label: 'Dips aux Parallèles (YouTube HD)',
+      label: 'Dips Parallèles (YouTube HD)',
       url: 'https://www.youtube.com/watch?v=2z8JmcrW-As',
-    },
-    {
-      label: 'Muscle-Up Technique (YouTube HD)',
-      url: 'https://www.youtube.com/watch?v=yW63V6XbKvg',
-    },
-    {
-      label: 'Pistol Squat (YouTube HD)',
-      url: 'https://www.youtube.com/watch?v=qDcniqddTeE',
     },
   ];
 
@@ -403,20 +582,18 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            {userRole === 'superadmin' && (
-              <button
-                type="button"
-                onClick={() => setIsEditingVideo(!isEditingVideo)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition ${
-                  isEditingVideo
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                <span>{isEditingVideo ? 'Fermer l\'éditeur' : 'Changer la vidéo'}</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setIsEditingVideo(!isEditingVideo)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition ${
+                isEditingVideo
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>{isEditingVideo ? 'Fermer l\'éditeur' : 'Changer la vidéo'}</span>
+            </button>
 
             <button
               onClick={onClose}
@@ -436,7 +613,7 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
         )}
 
         {/* Video Editor Panel (Collapsible) */}
-        {isEditingVideo && userRole === 'superadmin' && (
+        {isEditingVideo && (
           <div className="p-4 bg-blue-50/70 border-b border-blue-200/70 space-y-3 shrink-0">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-blue-950 flex items-center gap-1.5">
@@ -444,7 +621,7 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
                 <span>Associer ou remplacer la vidéo de démonstration</span>
               </span>
               <span className="text-[11px] text-blue-700">
-                Formats acceptés : Liens YouTube, Vimeo, MP4 direct, Cloud Storage ou fichier local
+                Formats acceptés : Liens YouTube, MP4 direct, Cloud Storage ou fichier local
               </span>
             </div>
 
@@ -455,7 +632,7 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
                   type="text"
                   value={videoInputUrl}
                   onChange={(e) => setVideoInputUrl(e.target.value)}
-                  placeholder="https://www.youtube.com/watch?v=... ou https://.../video.mp4"
+                  placeholder="https://www.youtube.com/watch?v=... ou exercises/core/...mp4"
                   className="w-full pl-9 pr-3 py-2 text-xs rounded-xl bg-white border border-blue-200 focus:outline-hidden focus:ring-2 focus:ring-blue-500 text-slate-900"
                 />
               </div>
@@ -472,6 +649,9 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
                 <input
                   type="file"
                   ref={fileInputRef}
+                  onClick={(e) => {
+                    (e.target as HTMLInputElement).value = '';
+                  }}
                   onChange={handleFileUpload}
                   accept="video/mp4,video/webm,video/quicktime,video/*"
                   className="hidden"
@@ -483,11 +663,21 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
                   disabled={isUploading}
                   className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 border border-blue-300 text-blue-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition"
                 >
-                  <Upload className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Importer un fichier (.mp4)</span>
+                  <Upload className={`w-3.5 h-3.5 ${isUploading ? 'animate-bounce text-blue-600' : 'text-blue-600'}`} />
+                  <span>{isUploading ? `Envoi (${uploadProgress}%)...` : 'Importer un fichier (.mp4)'}</span>
                 </button>
               </div>
             </div>
+
+            {/* Visual progress bar during upload */}
+            {isUploading && (
+              <div className="w-full bg-blue-200/70 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            )}
 
             {/* Quick Sample Presets */}
             <div className="flex flex-wrap items-center gap-1.5 pt-1">
@@ -511,9 +701,9 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
 
         {/* Modal Body: Player + Info Grid */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-6">
-          {/* Video Player */}
+          {/* Video Player réactif lié à l'URL en cours */}
           <ExerciseVideoPlayer
-            url={exercise.videoDemoUrl}
+            url={videoInputUrl || exercise.videoDemoUrl || (exercise as any).videoUrl || ''}
             exercise={exercise}
             showKinematicOverlay={true}
           />
@@ -598,7 +788,7 @@ export const ExerciseVideoModal: React.FC<ExerciseVideoModalProps> = ({
         <div className="p-4 border-t border-slate-200/80 bg-slate-50 flex items-center justify-between shrink-0">
           <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
             <Film className="w-3.5 h-3.5 text-slate-400" />
-            <span className="truncate max-w-xs sm:max-w-md">Source : {exercise.videoDemoUrl}</span>
+            <span className="truncate max-w-xs sm:max-w-md">Source : {videoInputUrl || exercise.videoDemoUrl || (exercise as any).videoUrl || 'Non renseignée'}</span>
           </div>
 
           <button

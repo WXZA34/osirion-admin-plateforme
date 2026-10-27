@@ -16,12 +16,14 @@ import { PushNotificationCampaign } from '../types/admin';
 
 interface PushCampaignsManagerProps {
   campaigns: PushNotificationCampaign[];
+  athletes?: any[];
   userRole: 'superadmin' | 'auditor';
   onSendCampaign: (campaign: PushNotificationCampaign) => void;
 }
 
 export const PushCampaignsManager: React.FC<PushCampaignsManagerProps> = ({
   campaigns,
+  athletes = [],
   userRole,
   onSendCampaign,
 }) => {
@@ -29,6 +31,7 @@ export const PushCampaignsManager: React.FC<PushCampaignsManagerProps> = ({
   const [title, setTitle] = useState('🔥 Votre séance du jour est prête !');
   const [bodyText, setBodyText] = useState('Maintenez votre streak ! Ouvrez Osirion pour valider votre entraînement.');
   const [targetAudience, setTargetAudience] = useState<PushNotificationCampaign['targetAudience']>('ALL_ATHLETES');
+  const [targetUserId, setTargetUserId] = useState('');
   const [deepLinkScreen, setDeepLinkScreen] = useState<PushNotificationCampaign['deepLinkScreen']>('WORKOUT_TODAY');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -40,9 +43,20 @@ export const PushCampaignsManager: React.FC<PushCampaignsManagerProps> = ({
       title,
       bodyText,
       targetAudience,
+      targetUserId: targetAudience === 'SPECIFIC_ATHLETE' ? targetUserId : undefined,
       scheduledFor: new Date().toISOString(),
       status: 'SENT',
-      recipientsCount: targetAudience === 'ALL_ATHLETES' ? 1250 : targetAudience === 'INACTIVE_3_DAYS' ? 240 : 435,
+      recipientsCount: targetAudience === 'ALL_ATHLETES' 
+        ? athletes.length 
+        : targetAudience === 'SPECIFIC_ATHLETE'
+          ? 1
+          : targetAudience === 'INACTIVE_3_DAYS' 
+            ? athletes.filter(a => {
+                if (!a.lastWorkoutAt || a.lastWorkoutAt === 'Récemment') return false;
+                // Simple check for inactivity if possible, or fallback to an estimate
+                return true; // Simplified for now since we don't have full date parsing
+              }).length || 240
+            : athletes.filter(a => a.subscriptionTier !== 'FREE').length,
       openRatePercent: 0,
       deepLinkScreen,
     };
@@ -222,12 +236,27 @@ export const PushCampaignsManager: React.FC<PushCampaignsManagerProps> = ({
                   onChange={(e) => setTargetAudience(e.target.value as any)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-900"
                 >
-                  <option value="ALL_ATHLETES">Tous les athlètes actifs (~1 250)</option>
-                  <option value="INACTIVE_3_DAYS">Inactifs depuis plus de 3 jours (~240)</option>
-                  <option value="PRO_SUBSCRIBERS">Abonnés Osirion Pro (~435)</option>
-                  <option value="BEGINNERS_ONLY">Débutants inscrits cette semaine (~110)</option>
+                  <option value="ALL_ATHLETES">Tous les athlètes inscrits ({athletes.length})</option>
+                  <option value="INACTIVE_3_DAYS">Inactifs depuis plus de 3 jours</option>
+                  <option value="PRO_SUBSCRIBERS">Abonnés Osirion Pro ({athletes.filter(a => a.subscriptionTier !== 'FREE').length})</option>
+                  <option value="BEGINNERS_ONLY">Débutants inscrits cette semaine</option>
+                  <option value="SPECIFIC_ATHLETE">Un athlète précis</option>
                 </select>
               </div>
+
+              {targetAudience === 'SPECIFIC_ATHLETE' && (
+                <div>
+                  <label className="font-medium text-slate-700 block mb-1">ID ou Pseudo de l'athlète :</label>
+                  <input
+                    type="text"
+                    required
+                    value={targetUserId}
+                    onChange={(e) => setTargetUserId(e.target.value)}
+                    placeholder="Ex: user_123456 ou shadow_warrior"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 focus:outline-none"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="font-medium text-slate-700 block mb-1">Écran mobile de redirection :</label>

@@ -3,15 +3,17 @@
  */
 
 export interface VideoPlayerConfig {
-  type: 'youtube' | 'direct' | 'vimeo' | 'tiktok' | 'unsupported';
+  type: 'youtube' | 'direct' | 'vimeo' | 'tiktok' | 'unsupported' | 'empty';
   embedUrl: string;
+  directUrl?: string;
   thumbnailUrl?: string;
   videoId?: string;
+  rawUrl?: string;
 }
 
-export function parseVideoUrl(url: string, autoPlay: boolean = false): VideoPlayerConfig {
-  if (!url || typeof url !== 'string') {
-    return { type: 'unsupported', embedUrl: '' };
+export function parseVideoUrl(url?: string, autoPlay: boolean = false): VideoPlayerConfig {
+  if (!url || typeof url !== 'string' || !url.trim()) {
+    return { type: 'empty', embedUrl: '', rawUrl: '' };
   }
 
   const cleanUrl = url.trim();
@@ -26,6 +28,7 @@ export function parseVideoUrl(url: string, autoPlay: boolean = false): VideoPlay
       videoId,
       embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?${autoPlayParam}&rel=0&modestbranding=1`,
       thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      rawUrl: cleanUrl,
     };
   }
 
@@ -40,6 +43,7 @@ export function parseVideoUrl(url: string, autoPlay: boolean = false): VideoPlay
       videoId,
       embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?${autoPlayParam}&rel=0&modestbranding=1`,
       thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      rawUrl: cleanUrl,
     };
   }
 
@@ -50,6 +54,7 @@ export function parseVideoUrl(url: string, autoPlay: boolean = false): VideoPlay
       type: 'vimeo',
       videoId: vimeoMatch[1],
       embedUrl: `https://player.vimeo.com/video/${vimeoMatch[1]}?${autoPlayParam}`,
+      rawUrl: cleanUrl,
     };
   }
 
@@ -60,24 +65,42 @@ export function parseVideoUrl(url: string, autoPlay: boolean = false): VideoPlay
       type: 'tiktok',
       videoId: tiktokMatch[1],
       embedUrl: `https://www.tiktok.com/embed/v2/${tiktokMatch[1]}`,
+      rawUrl: cleanUrl,
     };
   }
 
-  // 4. Direct video files (MP4, WebM, OGG, MOV, blob:, data:)
-  if (
-    cleanUrl.startsWith('blob:') ||
-    cleanUrl.startsWith('data:') ||
-    cleanUrl.match(/\.(mp4|webm|ogg|mov)(\?.*)?$/i)
-  ) {
+  // 5. Support direct des chemins Firebase Storage (ex: "exercises/core/abdos_velo.mp4" ou "gs://...")
+  let direct = cleanUrl;
+  if (direct.startsWith('gs://')) {
+    const clean = direct.replace(/^gs:\/\/[^/]+\//, '');
+    direct = `https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/${encodeURIComponent(clean)}?alt=media`;
     return {
       type: 'direct',
-      embedUrl: cleanUrl,
+      embedUrl: direct,
+      directUrl: direct,
+      rawUrl: cleanUrl,
+    };
+  } else if (
+    !direct.startsWith('http://') &&
+    !direct.startsWith('https://') &&
+    !direct.startsWith('blob:') &&
+    !direct.startsWith('data:')
+  ) {
+    const clean = direct.replace(/^\//, '');
+    direct = `https://firebasestorage.googleapis.com/v0/b/valerion-55414.firebasestorage.app/o/${encodeURIComponent(clean)}?alt=media`;
+    return {
+      type: 'direct',
+      embedUrl: direct,
+      directUrl: direct,
+      rawUrl: cleanUrl,
     };
   }
 
-  // Fallback as direct
+  // 6. Direct video files (MP4, WebM, OGG, MOV, blob:, data:)
   return {
     type: 'direct',
-    embedUrl: cleanUrl,
+    embedUrl: direct,
+    directUrl: direct,
+    rawUrl: cleanUrl,
   };
 }

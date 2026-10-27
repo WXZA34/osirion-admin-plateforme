@@ -37,6 +37,7 @@ import {
   DOJO_EXECUTION_MODES,
 } from '../data/mockData';
 import { parseVideoUrl } from '../utils/videoUtils';
+import { ExerciseVideoPlayer } from './ExerciseVideoModal';
 
 interface DojoGuideModeSimulatorProps {
   exercises: ExerciseItem[];
@@ -500,25 +501,15 @@ export const DojoGuideModeSimulator: React.FC<DojoGuideModeSimulatorProps> = ({
 
                   {/* Video Player looping */}
                   <div className="relative rounded-2xl overflow-hidden bg-black aspect-video border border-slate-700 shadow-lg">
-                    {activeVideoConfig?.type === 'youtube' || activeVideoConfig?.type === 'vimeo' ? (
-                      <iframe
-                        src={`${activeVideoConfig.embedUrl}&loop=1`}
-                        title={selectedExercise.name}
-                        className="w-full h-full border-0"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                      />
-                    ) : (
-                      <video
-                        src={activeVideoConfig?.embedUrl}
-                        autoPlay
-                        loop
-                        muted
-                        playsInline
-                        className="w-full h-full object-cover"
-                      />
-                    )}
-                    <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur-xs text-[10px] font-mono text-emerald-300">
+                    <ExerciseVideoPlayer
+                      url={selectedExercise.videoDemoUrl || (selectedExercise as any).videoUrl || ''}
+                      exercise={selectedExercise}
+                      showKinematicOverlay={false}
+                      autoPlay={true}
+                      loop={true}
+                      className="w-full h-full"
+                    />
+                    <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur-xs text-[10px] font-mono text-emerald-300 pointer-events-none">
                       Boucle continue • Forme parfaite
                     </div>
                   </div>
@@ -591,25 +582,15 @@ export const DojoGuideModeSimulator: React.FC<DojoGuideModeSimulatorProps> = ({
 
                     {/* Ghost Coach Mini Looping Video at top */}
                     <div className="relative rounded-xl overflow-hidden bg-black aspect-video border border-slate-700">
-                      {activeVideoConfig?.type === 'youtube' || activeVideoConfig?.type === 'vimeo' ? (
-                        <iframe
-                          src={`${activeVideoConfig.embedUrl}&loop=1`}
-                          title="Coach Fantôme"
-                          className="w-full h-full border-0"
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                          allowFullScreen
-                        />
-                      ) : (
-                        <video
-                          src={activeVideoConfig?.embedUrl}
-                          autoPlay
-                          loop
-                          muted
-                          playsInline
-                          className="w-full h-full object-cover"
-                        />
-                      )}
-                      <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/80 text-[10px] font-bold text-amber-300">
+                      <ExerciseVideoPlayer
+                        url={selectedExercise.videoDemoUrl || (selectedExercise as any).videoUrl || ''}
+                        exercise={selectedExercise}
+                        showKinematicOverlay={false}
+                        autoPlay={true}
+                        loop={true}
+                        className="w-full h-full"
+                      />
+                      <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/80 text-[10px] font-bold text-amber-300 pointer-events-none">
                         Guide visuel en temps réel
                       </div>
                     </div>

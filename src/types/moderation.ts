@@ -96,7 +96,7 @@ export interface AdminTransmission {
   title: string;
   body: string;
   targetAudience: 'ALL_ATHLETES' | 'SPECIFIC_ATHLETE' | 'CLAN_LEADERS' | 'WARNED_ATHLETES';
-  targetAthleteUsername?: string;
+  targetAthleteUsername?: string | null;
   priority: 'OFFICIAL' | 'URGENT' | 'DISCIPLINARY';
   sentBy: string;
   sentAt: string;
