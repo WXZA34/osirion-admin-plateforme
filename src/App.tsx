@@ -311,7 +311,16 @@ export default function App() {
   };
 
   const [showSplash, setShowSplash] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<AdminTab>('analytics');
+  const [activeTab, setActiveTab] = useState<AdminTab>(() => {
+    if (typeof window !== 'undefined') {
+      const search = window.location.search.toLowerCase();
+      const hash = window.location.hash.toLowerCase();
+      if (search.includes('domination') || hash.includes('domination') || search.includes('pantheon') || hash.includes('pantheon')) {
+        return 'pantheon';
+      }
+    }
+    return 'analytics';
+  });
   const [userRole, setUserRole] = useState<'superadmin' | 'auditor'>('superadmin');
 
   // Dropdown States

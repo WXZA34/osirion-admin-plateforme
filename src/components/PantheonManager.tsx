@@ -94,7 +94,16 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
   // Navigation Principale du Panthéon
   const [activeMainTab, setActiveMainTab] = useState<
     'rankings' | 'clans_management' | 'connect' | 'domination' | 'records' | 'titles_halos' | 'seasons'
-  >('rankings');
+  >(() => {
+    if (typeof window !== 'undefined') {
+      const search = window.location.search;
+      const hash = window.location.hash;
+      if (search.includes('domination') || hash.includes('domination')) {
+        return 'domination';
+      }
+    }
+    return 'rankings';
+  });
 
   // Les 4 Types Officiels de Classement (Issus du code Flutter Osirion)
   const [currentSortBy, setCurrentSortBy] = useState<PantheonSortType>('xp');
