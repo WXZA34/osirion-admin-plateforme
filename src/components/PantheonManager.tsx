@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AthleteUser, Clan } from '../types/admin';
 import {
   PantheonRecord,
@@ -12,6 +12,18 @@ import {
   INITIAL_PANTHEON_SEASONS,
   TitleRarity,
 } from '../data/pantheonData';
+import {
+  BastionTacticalSpot,
+  TerritoryHexModel,
+  BastionTacticalStatus,
+  TerritoryTacticalStatus,
+} from '../types/arena';
+import {
+  INITIAL_BASTIONS_SPOTS,
+  INITIAL_HEX_TERRITORIES,
+} from '../data/arenaData';
+import { collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch, getDocs } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import {
   Crown,
   Trophy,
@@ -49,6 +61,19 @@ import {
   Share2,
   Dumbbell,
   Hexagon,
+  Swords,
+  ShieldAlert,
+  Crosshair,
+  Layers,
+  Building2,
+  Navigation,
+  UploadCloud,
+  Lock,
+  Unlock,
+  History,
+  Map,
+  ShieldCheck,
+  CheckCheck,
 } from 'lucide-react';
 
 export type PantheonSortType = 'xp' | 'forceXp' | 'wisdomXp' | 'clans';
@@ -76,11 +101,52 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
   const [scopeFilter, setScopeFilter] = useState<'GLOBAL' | 'FRANCE' | 'PARIS' | 'LYON' | 'MARSEILLE'>('GLOBAL');
 
   // Datasets Réels
-  const [records, setRecords] = useState<PantheonRecord[]>([]);
+  const [records, setRecords] = useState<PantheonRecord[]>(INITIAL_PANTHEON_RECORDS);
   const [titles, setTitles] = useState<PantheonTitle[]>(INITIAL_PANTHEON_TITLES);
   const [halos, setHalos] = useState<PantheonHalo[]>(INITIAL_PANTHEON_HALOS);
-  const [clansList, setClansList] = useState<Clan[]>([]);
-  const [seasons] = useState<PantheonSeasonArchive[]>([]);
+  const [clansList, setClansList] = useState<Clan[]>(INITIAL_PANTHEON_CLANS);
+  const [seasons] = useState<PantheonSeasonArchive[]>(INITIAL_PANTHEON_SEASONS);
+
+  // Datasets Domination Territoriale H3
+  const [bastions, setBastions] = useState<BastionTacticalSpot[]>(INITIAL_BASTIONS_SPOTS);
+  const [territories, setTerritories] = useState<TerritoryHexModel[]>(INITIAL_HEX_TERRITORIES);
+  const [dominationView, setDominationView] = useState<'bastions' | 'map_h3' | 'clans_leaderboard'>('bastions');
+  const [dominationCityFilter, setDominationCityFilter] = useState<string>('ALL');
+  const [dominationStatusFilter, setDominationStatusFilter] = useState<string>('ALL');
+  const [dominationSearch, setDominationSearch] = useState<string>('');
+  const [selectedHexId, setSelectedHexId] = useState<string | null>(null);
+
+  // Modals Domination
+  const [showAddBastionModal, setShowAddBastionModal] = useState<boolean>(false);
+  const [transferringBastion, setTransferringBastion] = useState<BastionTacticalSpot | null>(null);
+  const [siegingBastion, setSiegingBastion] = useState<BastionTacticalSpot | null>(null);
+  const [detailBastion, setDetailBastion] = useState<BastionTacticalSpot | null>(null);
+  const [isSyncingDomination, setIsSyncingDomination] = useState<boolean>(false);
+
+  // Formulaire Nouveau Bastion
+  const [newBastionName, setNewBastionName] = useState('');
+  const [newBastionCity, setNewBastionCity] = useState('Paris');
+  const [newBastionNeighborhood, setNewBastionNeighborhood] = useState('');
+  const [newBastionLat, setNewBastionLat] = useState<number>(48.8566);
+  const [newBastionLng, setNewBastionLng] = useState<number>(2.3522);
+  const [newBastionType, setNewBastionType] = useState<BastionTacticalSpot['type']>('PARC_COMPLET');
+  const [newBastionEquipmentInput, setNewBastionEquipmentInput] = useState<string>(
+    'Kenguru Pro Master, Barres de Dips Jumelées, Barres Freestyle'
+  );
+  const [newBastionClan, setNewBastionClan] = useState('Ronin Calisthenics Paris');
+  const [newBastionBossPseudo, setNewBastionBossPseudo] = useState('max_frontlever');
+  const [newBastionBossReps, setNewBastionBossReps] = useState(30);
+  const [newBastionBossExercise, setNewBastionBossExercise] = useState('Tractions strictes');
+  const [newBastionStatus, setNewBastionStatus] = useState<BastionTacticalStatus>('FORTERESSE');
+
+  // Formulaire Transfert de Souveraineté
+  const [transferTargetClanName, setTransferTargetClanName] = useState('Ronin Calisthenics Paris');
+  const [transferNewStatus, setTransferNewStatus] = useState<BastionTacticalStatus>('FORTERESSE');
+  const [transferSendPush, setTransferSendPush] = useState(true);
+
+  // Formulaire Alerte Siège
+  const [siegeAttackingClanName, setSiegeAttackingClanName] = useState('Sparta Street Workout Lyon');
+  const [siegePushCustomText, setSiegePushCustomText] = useState('');
 
   // Searches
   const [clanSearchQuery, setClanSearchQuery] = useState('');
@@ -269,6 +335,282 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
     showToast(`Statut de @${athlete.username} mis à jour : ${status.toUpperCase()}`);
   };
 
+  // --- SYNCHRONISATION FIRESTORE ET CALCULS DOMINATION H3 ---
+  useEffect(() => {
+    const unsubBastions = onSnapshot(
+      collection(db, 'bastions'),
+      (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as BastionTacticalSpot));
+          setBastions(list);
+        }
+      },
+      (err) => console.warn('Firestore bastions onSnapshot error:', err)
+    );
+
+    const unsubTerritories = onSnapshot(
+      collection(db, 'territories'),
+      (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as TerritoryHexModel));
+          setTerritories(list);
+        }
+      },
+      (err) => console.warn('Firestore territories onSnapshot error:', err)
+    );
+
+    return () => {
+      unsubBastions();
+      unsubTerritories();
+    };
+  }, []);
+
+  // Déclin de 5% par tranche de 7 jours (Plafond 50%)
+  const computeDecayInfo = (bastion: BastionTacticalSpot) => {
+    const achievedDateStr = bastion.bossAchievedAt || bastion.lastBeatenAt || '2026-09-01';
+    const achievedTime = new Date(achievedDateStr).getTime();
+    const now = Date.now();
+    const daysInactive = Math.max(0, Math.floor((now - achievedTime) / (1000 * 60 * 60 * 24)));
+    const weeksInactive = Math.floor(daysInactive / 7);
+    const decayPercent = Math.min(50, weeksInactive * 5);
+    const bossReps = bastion.currentBoss?.reps || 25;
+    const effectiveReps = Math.max(1, Math.round(bossReps * (1 - decayPercent / 100)));
+    const isVulnerable = decayPercent >= 15 || bastion.tacticalStatus === 'CONFLIT';
+    return { daysInactive, weeksInactive, decayPercent, effectiveReps, isVulnerable };
+  };
+
+  // Statistiques de Domination
+  const clanDominanceStats = clansList.map((clan) => {
+    const clanBastions = bastions.filter(
+      (b) =>
+        b.currentBoss?.clanName?.toLowerCase().includes(clan.name.toLowerCase()) ||
+        clan.name.toLowerCase().includes(b.currentBoss?.clanName?.toLowerCase() || '___')
+    );
+    const clanHexes = territories.filter(
+      (t) =>
+        t.ownerClanName?.toLowerCase().includes(clan.name.toLowerCase()) ||
+        clan.name.toLowerCase().includes(t.ownerClanName?.toLowerCase() || '___')
+    );
+    const dailyPassiveAether = clanBastions.length * 250;
+    return {
+      clan,
+      bastionsCount: clanBastions.length,
+      hexesCount: clanHexes.length,
+      dailyPassiveAether,
+    };
+  }).sort((a, b) => b.bastionsCount - a.bastionsCount || b.hexesCount - a.hexesCount);
+
+  const supremeDominantClan = clanDominanceStats[0]?.clan?.name || 'Ronin Calisthenics Paris';
+  const conflitsCount = bastions.filter((b) => b.tacticalStatus === 'CONFLIT').length;
+  const forteressesCount = bastions.filter((b) => b.tacticalStatus === 'FORTERESSE').length;
+  const stablesCount = bastions.filter((b) => b.tacticalStatus === 'STABLE').length;
+
+  // Handlers Domination
+  const handleSyncDominationWithFirestore = async () => {
+    setIsSyncingDomination(true);
+    try {
+      const batch = writeBatch(db);
+      bastions.forEach((b) => {
+        const ref = doc(db, 'bastions', b.id);
+        batch.set(ref, b, { merge: true });
+      });
+      territories.forEach((t) => {
+        const ref = doc(db, 'territories', t.id);
+        batch.set(ref, t, { merge: true });
+      });
+      await batch.commit();
+      showToast(`🔥 Synchronisation réussie : ${bastions.length} Bastions et ${territories.length} Territoires H3 sauvegardés sur Firestore !`);
+    } catch (err: any) {
+      console.error('Erreur synchronisation domination:', err);
+      showToast(`Erreur lors de la synchronisation Firestore: ${err?.message || err}`);
+    } finally {
+      setIsSyncingDomination(false);
+    }
+  };
+
+  const handleSaveNewBastion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newBastionName.trim()) return;
+
+    const equipments = newBastionEquipmentInput
+      .split(',')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    const nowIso = new Date().toISOString();
+    const newSpotId = `bastion_${newBastionCity.toLowerCase().slice(0, 3)}_${Date.now()}`;
+
+    const newSpot: BastionTacticalSpot = {
+      id: newSpotId,
+      name: newBastionName.trim(),
+      city: newBastionCity,
+      neighborhood: newBastionNeighborhood.trim() || 'Centre Urbain',
+      position: { latitude: Number(newBastionLat), longitude: Number(newBastionLng) },
+      type: newBastionType,
+      equipment: equipments.length > 0 ? equipments : ['Barre de traction', 'Barres parallèles'],
+      tacticalStatus: newBastionStatus,
+      failedAttemptsCount: 0,
+      bossAchievedAt: nowIso,
+      lastBeatenAt: nowIso,
+      sourcePriority: 'FIRESTORE_ECLAIREUR',
+      images: [
+        'https://images.unsplash.com/photo-1574680096145-d05b474e2155?w=500',
+        'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=500',
+      ],
+      osmNote: `Homologué par le SuperAdmin le ${new Date().toLocaleDateString('fr-FR')}`,
+      currentBoss: {
+        userId: `boss_${Date.now()}`,
+        pseudo: newBastionBossPseudo.trim() || 'Guerrier_Inconnu',
+        clanName: newBastionClan,
+        reps: Number(newBastionBossReps) || 25,
+        exerciseType: newBastionBossExercise,
+        achievedAt: nowIso.slice(0, 10),
+        effectiveReps: Number(newBastionBossReps) || 25,
+      },
+      leaderboard: [
+        {
+          userId: `boss_${Date.now()}`,
+          pseudo: newBastionBossPseudo.trim() || 'Guerrier_Inconnu',
+          clanName: newBastionClan,
+          reps: Number(newBastionBossReps) || 25,
+          exerciseType: newBastionBossExercise,
+          achievedAt: nowIso.slice(0, 10),
+          effectiveReps: Number(newBastionBossReps) || 25,
+        },
+      ],
+    };
+
+    setBastions((prev) => [newSpot, ...prev]);
+
+    try {
+      await setDoc(doc(db, 'bastions', newSpotId), newSpot);
+    } catch (err) {
+      console.warn('Erreur setDoc bastion:', err);
+    }
+
+    if (onSendPushNotification) {
+      onSendPushNotification(
+        '🏰 Nouveau Bastion de Street Workout Homologué !',
+        `Le Bastion « ${newSpot.name} » (${newSpot.city}) entre dans le Panthéon sous le règne de ${newBastionClan} !`
+      );
+    }
+
+    setShowAddBastionModal(false);
+    setNewBastionName('');
+    setNewBastionNeighborhood('');
+    showToast(`Bastion « ${newSpot.name} » homologué et actif !`);
+  };
+
+  const handleTransferSovereignty = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transferringBastion) return;
+
+    const nowIso = new Date().toISOString();
+
+    const updatedBastion: BastionTacticalSpot = {
+      ...transferringBastion,
+      tacticalStatus: transferNewStatus,
+      bossAchievedAt: nowIso,
+      lastBeatenAt: nowIso,
+      currentBoss: transferringBastion.currentBoss
+        ? {
+            ...transferringBastion.currentBoss,
+            clanName: transferTargetClanName,
+            achievedAt: nowIso.slice(0, 10),
+            effectiveReps: transferringBastion.currentBoss.reps, // Reset decay
+          }
+        : undefined,
+    };
+
+    setBastions((prev) => prev.map((b) => (b.id === transferringBastion.id ? updatedBastion : b)));
+
+    try {
+      await setDoc(doc(db, 'bastions', transferringBastion.id), updatedBastion, { merge: true });
+    } catch (err) {
+      console.warn('Erreur Firestore transfert:', err);
+    }
+
+    if (transferSendPush && onSendPushNotification) {
+      onSendPushNotification(
+        '🚩 Souveraineté Territoriale Transférée !',
+        `Le Bastion « ${transferringBastion.name} » (${transferringBastion.city}) passe sous le contrôle officiel de « ${transferTargetClanName} » !`
+      );
+    }
+
+    setTransferringBastion(null);
+    showToast(`Souveraineté transmise à ${transferTargetClanName} (Decay réinitialisé) !`);
+  };
+
+  const handleTriggerSiege = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!siegingBastion) return;
+
+    const updatedBastion: BastionTacticalSpot = {
+      ...siegingBastion,
+      tacticalStatus: 'CONFLIT',
+    };
+
+    setBastions((prev) => prev.map((b) => (b.id === siegingBastion.id ? updatedBastion : b)));
+
+    try {
+      await setDoc(doc(db, 'bastions', siegingBastion.id), updatedBastion, { merge: true });
+    } catch (err) {
+      console.warn('Erreur Firestore siège:', err);
+    }
+
+    const notifMsg =
+      siegePushCustomText.trim() ||
+      `La faction « ${siegeAttackingClanName} » a déclaré le siège sur le Bastion « ${siegingBastion.name} » (${siegingBastion.city}) ! Défenseurs demandés d'urgence !`;
+
+    if (onSendPushNotification) {
+      onSendPushNotification('⚔️ ALERTE SIÈGE : CONFLIT DÉCLARÉ !', notifMsg);
+    }
+
+    setSiegingBastion(null);
+    setSiegePushCustomText('');
+    showToast(`⚔️ État de siège déclaré sur « ${siegingBastion.name} » !`);
+  };
+
+  const handleRepairBastionFortress = async (bastion: BastionTacticalSpot) => {
+    const nowIso = new Date().toISOString();
+    const updatedBastion: BastionTacticalSpot = {
+      ...bastion,
+      tacticalStatus: 'FORTERESSE',
+      bossAchievedAt: nowIso,
+      currentBoss: bastion.currentBoss
+        ? {
+            ...bastion.currentBoss,
+            achievedAt: nowIso.slice(0, 10),
+            effectiveReps: bastion.currentBoss.reps, // Decay 0%
+          }
+        : undefined,
+    };
+
+    setBastions((prev) => prev.map((b) => (b.id === bastion.id ? updatedBastion : b)));
+
+    try {
+      await setDoc(doc(db, 'bastions', bastion.id), updatedBastion, { merge: true });
+    } catch (err) {
+      console.warn('Erreur Firestore repair:', err);
+    }
+
+    showToast(`🛡️ Bastion « ${bastion.name} » consolidé en FORTERESSE ! Decay réinitialisé à 0%.`);
+  };
+
+  const handleDeleteBastion = async (bastionId: string, bastionName: string) => {
+    if (!confirm(`Supprimer définitivement le Bastion « ${bastionName} » du Panthéon et de Firestore ?`)) return;
+
+    setBastions((prev) => prev.filter((b) => b.id !== bastionId));
+
+    try {
+      await deleteDoc(doc(db, 'bastions', bastionId));
+    } catch (err) {
+      console.warn('Erreur Firestore delete bastion:', err);
+    }
+
+    showToast(`Bastion « ${bastionName} » supprimé.`);
+  };
+
   return (
     <div className="space-y-6">
       {/* 1. GRAND BANDEAU PANTHÉON OSIRION */}
@@ -401,7 +743,12 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
           }`}
         >
           <Hexagon className="w-4 h-4 text-emerald-400" />
-          <span>Domination Territoriale H3</span>
+          <span>Domination H3 ({bastions.length})</span>
+          {conflitsCount > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-rose-500 text-white font-bold animate-pulse">
+              {conflitsCount} Siège{conflitsCount > 1 ? 's' : ''}
+            </span>
+          )}
         </button>
 
         <button
@@ -1110,35 +1457,787 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
         </div>
       )}
 
-      {/* 6. ONGLET 4 : DOMINATION TERRITORIALE (BASTIONS H3) */}
+      {/* 6. ONGLET 4 : DOMINATION TERRITORIALE (BASTIONS H3 & SOUVERAINETÉ) */}
       {activeMainTab === 'domination' && (
-        <div className="space-y-6">
-          <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 space-y-4">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Hexagon className="w-4 h-4 text-emerald-600" />
-                <span>Domination Territoriale & Grille Spatiale H3</span>
-              </h3>
-              <p className="text-xs text-slate-500">
-                Cartographie des bastions de Street Workout contrôlés par les clans en France
-              </p>
+        <div className="space-y-6 animate-in fade-in">
+          {/* BANDEAU EN-TÊTE DOMINATION */}
+          <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950/80 rounded-3xl border border-slate-800 shadow-xl p-6 sm:p-7 text-white relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+              <div className="space-y-2">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold tracking-wide">
+                  <Hexagon className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>GRILLE SPATIALE UBER H3 • SOUVERAINETÉ DES BASTIONS & FACTIONS</span>
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black text-white flex items-center gap-3">
+                  <span>Domination Territoriale des Factions</span>
+                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-xl bg-emerald-950/80 text-emerald-300 border border-emerald-700/60">
+                    5% Decay / 7 jours
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                  Cartographie spatiale des bastions de Street Workout en France. Arbitrez les conquêtes de territoires, visualisez le déclin d'inactivité du Boss et déclenchez des états de siège avec pushs synchronisés.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <button
+                  onClick={() => setShowAddBastionModal(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-slate-950 font-bold text-xs shadow-lg shadow-emerald-950/40 transition transform active:scale-95"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Homologuer un Bastion</span>
+                </button>
+
+                <button
+                  onClick={handleSyncDominationWithFirestore}
+                  disabled={isSyncingDomination}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-700/90 text-white font-semibold text-xs border border-slate-700 transition disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingDomination ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingDomination ? 'Synchronisation...' : 'Synchroniser Firestore'}</span>
+                </button>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                <span className="text-xs text-slate-500 block font-semibold">Bastions Totaux Homologués</span>
-                <strong className="text-2xl font-black font-mono text-slate-900 mt-1 block">14</strong>
+            {/* 5 KPIs DOMINATION */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-6 pt-5 border-t border-slate-800/80">
+              <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-2xl backdrop-blur-xs">
+                <span className="text-[11px] text-slate-400 block font-semibold flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Bastions Homologués</span>
+                </span>
+                <strong className="text-xl font-black font-mono text-white mt-1 block">
+                  {bastions.length} <span className="text-xs text-slate-400 font-normal">spots</span>
+                </strong>
               </div>
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                <span className="text-xs text-slate-500 block font-semibold">Clan Dominant National</span>
-                <strong className="text-base font-bold text-emerald-700 mt-1 block">Ronin Paris (6 Bastions)</strong>
+
+              <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-2xl backdrop-blur-xs">
+                <span className="text-[11px] text-slate-400 block font-semibold flex items-center gap-1.5">
+                  <Crown className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Faction Empereur</span>
+                </span>
+                <strong className="text-sm font-bold text-amber-300 mt-1 block truncate">
+                  {supremeDominantClan}
+                </strong>
               </div>
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                <span className="text-xs text-slate-500 block font-semibold">Taux de Conflit Actif</span>
-                <strong className="text-2xl font-black font-mono text-amber-600 mt-1 block">42%</strong>
+
+              <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-2xl backdrop-blur-xs">
+                <span className="text-[11px] text-slate-400 block font-semibold flex items-center gap-1.5">
+                  <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Sièges / Conflits</span>
+                </span>
+                <strong className={`text-xl font-black font-mono mt-1 block ${conflitsCount > 0 ? 'text-rose-400 animate-pulse' : 'text-slate-300'}`}>
+                  {conflitsCount} <span className="text-xs font-normal">actifs</span>
+                </strong>
+              </div>
+
+              <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-2xl backdrop-blur-xs">
+                <span className="text-[11px] text-slate-400 block font-semibold flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Forteresses Inviolées</span>
+                </span>
+                <strong className="text-xl font-black font-mono text-emerald-400 mt-1 block">
+                  {forteressesCount} <span className="text-xs font-normal">bastions</span>
+                </strong>
+              </div>
+
+              <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-2xl backdrop-blur-xs col-span-2 sm:col-span-1">
+                <span className="text-[11px] text-slate-400 block font-semibold flex items-center gap-1.5">
+                  <Coins className="w-3.5 h-3.5 text-yellow-400" />
+                  <span>Aether Passif / Jour</span>
+                </span>
+                <strong className="text-xl font-black font-mono text-yellow-300 mt-1 block">
+                  {clanDominanceStats.reduce((sum, c) => sum + c.dailyPassiveAether, 0).toLocaleString()} ₳
+                </strong>
               </div>
             </div>
           </div>
+
+          {/* SOUS-NAVIGATION DES 3 VUES DOMINATION */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-2 rounded-2xl border border-slate-200/80 shadow-xs">
+            <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-bold">
+              <button
+                onClick={() => setDominationView('bastions')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl transition ${
+                  dominationView === 'bastions'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Building2 className="w-4 h-4" />
+                <span>Bastions & Lieux Sacrés ({bastions.length})</span>
+              </button>
+
+              <button
+                onClick={() => setDominationView('map_h3')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl transition ${
+                  dominationView === 'map_h3'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Map className="w-4 h-4" />
+                <span>Radar & Carte Hexagonale H3 ({territories.length})</span>
+              </button>
+
+              <button
+                onClick={() => setDominationView('clans_leaderboard')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl transition ${
+                  dominationView === 'clans_leaderboard'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Trophy className="w-4 h-4" />
+                <span>Classement Factions & Conquête</span>
+              </button>
+            </div>
+
+            {/* BARRE DE RECHERCHE ET FILTRES RAPIDES */}
+            {dominationView !== 'clans_leaderboard' && (
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Filtrer spot, boss, clan..."
+                    value={dominationSearch}
+                    onChange={(e) => setDominationSearch(e.target.value)}
+                    className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 w-48 sm:w-56"
+                  />
+                </div>
+
+                <select
+                  value={dominationCityFilter}
+                  onChange={(e) => setDominationCityFilter(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-700 font-semibold focus:outline-hidden"
+                >
+                  <option value="ALL">Toutes les métropoles</option>
+                  <option value="Paris">Paris</option>
+                  <option value="Lyon">Lyon</option>
+                  <option value="Marseille">Marseille</option>
+                  <option value="Bordeaux">Bordeaux</option>
+                  <option value="Lille">Lille</option>
+                  <option value="Toulouse">Toulouse</option>
+                </select>
+
+                <select
+                  value={dominationStatusFilter}
+                  onChange={(e) => setDominationStatusFilter(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-700 font-semibold focus:outline-hidden"
+                >
+                  <option value="ALL">Tous les statuts</option>
+                  <option value="FORTERESSE">Forteresses Inviolées</option>
+                  <option value="CONFLIT">En Siège / Conflit</option>
+                  <option value="STABLE">Stables</option>
+                  <option value="VIERGE">Vierges</option>
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* VUE 1 : GRILLE DES BASTIONS & DÉCLIN DE DÉFENSE (DECAY 5%) */}
+          {dominationView === 'bastions' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {bastions
+                  .filter((b) => {
+                    const matchCity = dominationCityFilter === 'ALL' || b.city.toLowerCase() === dominationCityFilter.toLowerCase();
+                    const matchStatus = dominationStatusFilter === 'ALL' || b.tacticalStatus === dominationStatusFilter;
+                    const q = dominationSearch.toLowerCase();
+                    const matchQuery =
+                      !q ||
+                      b.name.toLowerCase().includes(q) ||
+                      b.city.toLowerCase().includes(q) ||
+                      b.neighborhood.toLowerCase().includes(q) ||
+                      (b.currentBoss?.pseudo || '').toLowerCase().includes(q) ||
+                      (b.currentBoss?.clanName || '').toLowerCase().includes(q);
+                    return matchCity && matchStatus && matchQuery;
+                  })
+                  .map((bastion) => {
+                    const decay = computeDecayInfo(bastion);
+                    const isConflit = bastion.tacticalStatus === 'CONFLIT';
+                    const isForteresse = bastion.tacticalStatus === 'FORTERESSE';
+                    const isStable = bastion.tacticalStatus === 'STABLE';
+
+                    return (
+                      <div
+                        key={bastion.id}
+                        className={`bg-white rounded-3xl border transition-all duration-300 shadow-xs hover:shadow-md overflow-hidden flex flex-col justify-between ${
+                          isConflit
+                            ? 'border-rose-400 ring-2 ring-rose-400/30'
+                            : isForteresse
+                            ? 'border-emerald-300/80'
+                            : 'border-slate-200/80'
+                        }`}
+                      >
+                        <div>
+                          {/* BANNIÈRE IMAGE DU SPOT */}
+                          <div className="relative h-44 w-full bg-slate-900 overflow-hidden">
+                            <img
+                              src={
+                                bastion.images?.[0] ||
+                                'https://images.unsplash.com/photo-1574680096145-d05b474e2155?w=600'
+                              }
+                              alt={bastion.name}
+                              className="w-full h-full object-cover opacity-85 hover:scale-105 transition-transform duration-500"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
+
+                            {/* BADGES HAUT DE BANNIÈRE */}
+                            <div className="absolute top-3 left-3 flex items-center gap-1.5">
+                              <span className="px-2.5 py-1 rounded-xl bg-slate-950/80 backdrop-blur-md text-white font-mono text-[11px] font-bold border border-slate-700/60 flex items-center gap-1">
+                                <MapPin className="w-3 h-3 text-emerald-400" />
+                                <span>{bastion.city}</span>
+                              </span>
+                              <span className="px-2 py-0.5 rounded-lg bg-black/60 text-slate-300 text-[10px] font-medium backdrop-blur-xs">
+                                {bastion.neighborhood}
+                              </span>
+                            </div>
+
+                            <div className="absolute top-3 right-3">
+                              {isConflit && (
+                                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-rose-600/95 text-white font-black text-[10px] uppercase tracking-wider animate-pulse shadow-lg">
+                                  <Swords className="w-3 h-3" />
+                                  <span>SIÈGE ACTIF</span>
+                                </span>
+                              )}
+                              {isForteresse && (
+                                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-emerald-600/90 text-white font-bold text-[10px] uppercase tracking-wider backdrop-blur-xs shadow-md">
+                                  <ShieldCheck className="w-3 h-3" />
+                                  <span>FORTERESSE</span>
+                                </span>
+                              )}
+                              {isStable && (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-sky-600/90 text-white font-bold text-[10px] uppercase tracking-wider backdrop-blur-xs">
+                                  <Shield className="w-3 h-3" />
+                                  <span>STABLE</span>
+                                </span>
+                              )}
+                              {bastion.tacticalStatus === 'VIERGE' && (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-700 text-slate-200 font-bold text-[10px] uppercase">
+                                  <span>VIERGE</span>
+                                </span>
+                              )}
+                            </div>
+
+                            {/* TITRE DU BASTION DANS LE BAS DE L'IMAGE */}
+                            <div className="absolute bottom-3 left-3 right-3 text-white">
+                              <h4 className="font-black text-base drop-shadow-sm leading-snug truncate">
+                                {bastion.name}
+                              </h4>
+                              <span className="text-[11px] text-slate-300 font-medium">
+                                Type : {bastion.type.replace('_', ' ')}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* CONTENU PRINCIPAL DE LA CARTE */}
+                          <div className="p-4 space-y-3.5">
+                            {/* TAGS D'ÉQUIPEMENTS */}
+                            <div className="flex flex-wrap gap-1">
+                              {bastion.equipment.slice(0, 3).map((eq, idx) => (
+                                <span
+                                  key={idx}
+                                  className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-lg font-medium border border-slate-200/60"
+                                >
+                                  {eq}
+                                </span>
+                              ))}
+                              {bastion.equipment.length > 3 && (
+                                <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-lg font-medium">
+                                  +{bastion.equipment.length - 3}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* BLOC BOSS ET FACTION SOUVERAINE */}
+                            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center text-slate-950 font-black text-xs shadow-xs">
+                                    {bastion.currentBoss?.pseudo?.[0]?.toUpperCase() || 'B'}
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] text-slate-400 font-medium block">Boss Souverain</span>
+                                    <strong className="text-xs font-bold text-slate-900 block leading-tight">
+                                      @{bastion.currentBoss?.pseudo || 'Non réclamé'}
+                                    </strong>
+                                  </div>
+                                </div>
+
+                                <div className="text-right">
+                                  <span className="text-[10px] text-slate-400 block font-medium">Record de Défense</span>
+                                  <span className="text-sm font-black font-mono text-emerald-700 block">
+                                    {bastion.currentBoss?.reps || 0} reps
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 text-xs">
+                                <span className="text-slate-500 text-[11px] flex items-center gap-1">
+                                  <Shield className="w-3 h-3 text-indigo-500" />
+                                  <span className="font-semibold text-slate-800">
+                                    {bastion.currentBoss?.clanName || 'Faction Indépendante'}
+                                  </span>
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  {bastion.currentBoss?.exerciseType || 'PULL_UPS'}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* BLOC DÉCLIN DU RECORD (DECAY 5% / 7 JOURS) */}
+                            <div className="bg-slate-900 text-white p-3 rounded-2xl space-y-2">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-[11px] text-slate-300 font-medium flex items-center gap-1.5">
+                                  <History className="w-3.5 h-3.5 text-amber-400" />
+                                  <span>Déclin de 5% / 7 jours</span>
+                                </span>
+                                <span className={`font-mono font-bold text-xs ${decay.decayPercent > 10 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                  -{decay.decayPercent}% ({decay.effectiveReps} reps eff.)
+                                </span>
+                              </div>
+
+                              {/* Jauge visuelle */}
+                              <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden p-0.5 border border-slate-700">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-500 ${
+                                    decay.decayPercent >= 15
+                                      ? 'bg-rose-500'
+                                      : decay.decayPercent > 0
+                                      ? 'bg-amber-400'
+                                      : 'bg-emerald-400'
+                                  }`}
+                                  style={{ width: `${Math.max(5, 100 - decay.decayPercent * 2)}%` }}
+                                />
+                              </div>
+
+                              <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                <span>Inactivité : {decay.daysInactive}j ({decay.weeksInactive} sem.)</span>
+                                {decay.isVulnerable ? (
+                                  <span className="text-rose-400 font-bold flex items-center gap-1">
+                                    <AlertCircle className="w-3 h-3" />
+                                    <span>Vulnérable au Siège</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-emerald-400 font-semibold">Défense Optimale</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* BARRE D'ACTIONS DU BASTION */}
+                        <div className="p-4 pt-0 space-y-2">
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <button
+                              onClick={() => handleRepairBastionFortress(bastion)}
+                              title="Réinitialise le decay et passe le spot en FORTERESSE"
+                              className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold transition flex items-center justify-center gap-1.5 border border-emerald-200/80"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              <span>Fortifier</span>
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setTransferringBastion(bastion);
+                                setTransferTargetClanName(clansList[0]?.name || 'Ronin Calisthenics Paris');
+                              }}
+                              className="px-3 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold transition flex items-center justify-center gap-1.5 border border-indigo-200/80"
+                            >
+                              <Share2 className="w-3.5 h-3.5" />
+                              <span>Transférer</span>
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                setSiegingBastion(bastion);
+                                setSiegeAttackingClanName(clansList[1]?.name || 'Sparta Street Workout Lyon');
+                              }}
+                              className="flex-1 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs transition flex items-center justify-center gap-1.5 border border-rose-200"
+                            >
+                              <Swords className="w-3.5 h-3.5 text-rose-600" />
+                              <span>Déclarer Siège</span>
+                            </button>
+
+                            <button
+                              onClick={() => setDetailBastion(bastion)}
+                              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition flex items-center justify-center gap-1"
+                              title="Consulter le Leaderboard complet"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Fiche</span>
+                            </button>
+
+                            {userRole === 'superadmin' && (
+                              <button
+                                onClick={() => handleDeleteBastion(bastion.id, bastion.name)}
+                                className="p-2 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition"
+                                title="Supprimer le Bastion"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* VUE 2 : RADAR & CARTE HEXAGONALE H3 */}
+          {dominationView === 'map_h3' && (
+            <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <Hexagon className="w-4 h-4 text-emerald-600" />
+                    <span>Radar Tactique Uber H3 (Résolution 8)</span>
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    Découpage spatial géodésique des métropoles françaises en hexagones de 0.73 km²
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500 font-semibold">Métropole active :</span>
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold text-slate-700">
+                    {['Paris', 'Lyon', 'Marseille'].map((city) => (
+                      <button
+                        key={city}
+                        onClick={() => setDominationCityFilter(city)}
+                        className={`px-3 py-1 rounded-lg transition ${
+                          dominationCityFilter === city
+                            ? 'bg-white text-emerald-700 shadow-xs'
+                            : 'hover:text-slate-900'
+                        }`}
+                      >
+                        {city}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* GRILLE TACTIQUE HEXAGONALE INTERACTIVE */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* CANVAS / SVG INTERACTIF DE LA GRILLE */}
+                <div className="lg:col-span-2 bg-slate-950 rounded-2xl p-6 border border-slate-800 relative overflow-hidden flex flex-col items-center justify-center min-h-[380px]">
+                  {/* Grille de fond radar */}
+                  <div className="absolute inset-0 bg-[radial-gradient(#10b981_1px,transparent_1px)] [background-size:24px_24px] opacity-15 pointer-events-none" />
+
+                  {/* Hexagons Honeycomb SVG */}
+                  <div className="relative z-10 w-full max-w-lg aspect-square flex items-center justify-center">
+                    <svg viewBox="0 0 500 450" className="w-full h-full filter drop-shadow-xl">
+                      {/* Hexagones interconnectés */}
+                      {territories.map((hex, idx) => {
+                        // Positionnement schématique géodésique
+                        const positions = [
+                          { cx: 250, cy: 150 },
+                          { cx: 160, cy: 200 },
+                          { cx: 340, cy: 200 },
+                          { cx: 250, cy: 250 },
+                          { cx: 160, cy: 300 },
+                          { cx: 340, cy: 300 },
+                        ];
+                        const pos = positions[idx % positions.length];
+                        const isSelected = selectedHexId === hex.id;
+                        const isDisputed = hex.status === 'DISPUTE';
+                        const fillHex = isDisputed
+                          ? '#f43f5e'
+                          : hex.ownerClanName?.includes('Ronin')
+                          ? '#6366f1'
+                          : hex.ownerClanName?.includes('Spart')
+                          ? '#f59e0b'
+                          : '#10b981';
+
+                        return (
+                          <g
+                            key={hex.id}
+                            onClick={() => setSelectedHexId(hex.id)}
+                            className="cursor-pointer transition-transform hover:scale-105"
+                          >
+                            <polygon
+                              points={`${pos.cx},${pos.cy - 48} ${pos.cx + 42},${pos.cy - 24} ${pos.cx + 42},${pos.cy + 24} ${pos.cx},${pos.cy + 48} ${pos.cx - 42},${pos.cy + 24} ${pos.cx - 42},${pos.cy - 24}`}
+                              fill={fillHex}
+                              fillOpacity={isSelected ? 0.9 : 0.4}
+                              stroke={isSelected ? '#ffffff' : fillHex}
+                              strokeWidth={isSelected ? 3 : 1.5}
+                              strokeDasharray={isDisputed ? '4 2' : 'none'}
+                              className="transition-all duration-300"
+                            />
+                            {/* Pin / Icône au centre de l'hexagone */}
+                            <circle cx={pos.cx} cy={pos.cy} r={6} fill="#ffffff" />
+                            <text
+                              x={pos.cx}
+                              y={pos.cy + 18}
+                              textAnchor="middle"
+                              fill="#ffffff"
+                              fontSize="10"
+                              fontWeight="bold"
+                              fontFamily="monospace"
+                            >
+                              {hex.zoneName.slice(0, 10)}
+                            </text>
+                            <text
+                              x={pos.cx}
+                              y={pos.cy + 28}
+                              textAnchor="middle"
+                              fill="#94a3b8"
+                              fontSize="8"
+                              fontFamily="monospace"
+                            >
+                              {hex.influencePoints} pts
+                            </text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+
+                  {/* Légende radar */}
+                  <div className="absolute bottom-3 left-4 right-4 flex flex-wrap items-center justify-between text-[11px] text-slate-400 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-800">
+                    <div className="flex items-center gap-3">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
+                        <span>Ronin Paris</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                        <span>Sparta Lyon</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                        <span>Marseille</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
+                        <span>Zone en Siège</span>
+                      </span>
+                    </div>
+                    <span className="text-slate-500 font-mono">H3 Index: 881fb4...</span>
+                  </div>
+                </div>
+
+                {/* PANNEAU D'INSPECTION DE LA CELLULE SÉLECTIONNÉE */}
+                <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200/80 flex flex-col justify-between">
+                  {(() => {
+                    const activeHex = territories.find((t) => t.id === selectedHexId) || territories[0];
+                    if (!activeHex) return <p className="text-xs text-slate-400">Aucune zone sélectionnée</p>;
+
+                    const associatedBastions = bastions.filter(
+                      (b) => b.city.toLowerCase() === activeHex.city.toLowerCase()
+                    );
+
+                    return (
+                      <div className="space-y-4">
+                        <div className="border-b border-slate-200 pb-3">
+                          <span className="text-[10px] uppercase font-bold text-emerald-600 block tracking-wider">
+                            Cellule Tactique H3 #{activeHex.h3Index.slice(-8)}
+                          </span>
+                          <h4 className="text-lg font-black text-slate-900 mt-0.5">{activeHex.zoneName}</h4>
+                          <span className="text-xs text-slate-500">{activeHex.city} • Coordonnées : {activeHex.center.latitude.toFixed(4)}, {activeHex.center.longitude.toFixed(4)}</span>
+                        </div>
+
+                        {/* Faction Souveraine */}
+                        <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Faction Régnante</span>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-black text-slate-900">{activeHex.ownerClanName || 'Zone Neutre'}</span>
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold text-[10px]">
+                              {activeHex.status}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-2 border-t border-slate-100 text-xs">
+                            <img
+                              src={activeHex.ownerLeaderAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
+                              alt="Leader"
+                              className="w-6 h-6 rounded-full object-cover"
+                            />
+                            <span className="text-slate-600">
+                              Chef de zone : <strong>@{activeHex.ownerLeaderPseudo || 'Inconnu'}</strong>
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Métriques de contrôle */}
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                            <span className="text-[10px] text-slate-400 block font-medium">Contenders Actifs</span>
+                            <strong className="text-sm font-black text-slate-900 mt-0.5 block">
+                              {activeHex.contendersCount} athlètes
+                            </strong>
+                          </div>
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                            <span className="text-[10px] text-slate-400 block font-medium">Points d'Influence</span>
+                            <strong className="text-sm font-black text-emerald-600 font-mono mt-0.5 block">
+                              {activeHex.influencePoints} pts
+                            </strong>
+                          </div>
+                        </div>
+
+                        {/* Déclin de défense du territoire */}
+                        <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs space-y-1">
+                          <span className="font-bold text-amber-900 flex items-center gap-1.5">
+                            <History className="w-3.5 h-3.5 text-amber-600" />
+                            <span>Compte à rebours du Déclin :</span>
+                          </span>
+                          <p className="text-[11px] text-amber-800">
+                            Il reste <strong className="font-mono">{activeHex.defenseDecayHoursLeft} heures</strong> avant que cette cellule ne perde son bouclier territorial si aucune session de course ou de workout n'est enregistrée.
+                          </p>
+                        </div>
+
+                        {/* Bastions dans cette zone */}
+                        <div className="space-y-1.5 pt-1">
+                          <span className="text-[11px] font-bold text-slate-700 block">
+                            Bastions dans ce secteur ({associatedBastions.length}) :
+                          </span>
+                          {associatedBastions.map((b) => (
+                            <div
+                              key={b.id}
+                              onClick={() => {
+                                setDominationView('bastions');
+                                setDominationSearch(b.name);
+                              }}
+                              className="bg-white p-2 rounded-xl border border-slate-200 flex items-center justify-between text-xs hover:border-emerald-400 cursor-pointer transition"
+                            >
+                              <span className="font-semibold text-slate-900 truncate">{b.name}</span>
+                              <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* VUE 3 : CLASSEMENT NATIONAL DES FACTIONS & CONQUÊTE */}
+          {dominationView === 'clans_leaderboard' && (
+            <div className="space-y-6">
+              {/* PODIUM DES 3 CLANS MAÎTRES DE FRANCE */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {clanDominanceStats.slice(0, 3).map((item, idx) => {
+                  const medals = ['👑 EMPEREUR NATIONAL', '🥈 DEUXIÈME FACTION', '🥉 TROISIÈME FACTION'];
+                  const borders = ['border-amber-400 bg-amber-50/30', 'border-slate-300 bg-slate-50', 'border-amber-700/30 bg-orange-50/20'];
+
+                  return (
+                    <div
+                      key={item.clan.id}
+                      className={`rounded-3xl border p-5 space-y-3 relative overflow-hidden ${borders[idx] || 'border-slate-200'}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 bg-amber-100 px-2.5 py-0.5 rounded-full">
+                          {medals[idx]}
+                        </span>
+                        <span className="text-xl font-black font-mono text-slate-900">#{idx + 1}</span>
+                      </div>
+
+                      <div>
+                        <h4 className="text-lg font-black text-slate-900">{item.clan.name}</h4>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Suzerain : <strong>@{item.clan.leaderPseudo}</strong> • {item.clan.membersCount} athlètes
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/80 text-xs">
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                          <span className="text-[10px] text-slate-400 block font-medium">Bastions Tenus</span>
+                          <strong className="text-base font-black text-emerald-700 font-mono mt-0.5 block">
+                            {item.bastionsCount}
+                          </strong>
+                        </div>
+
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                          <span className="text-[10px] text-slate-400 block font-medium">Revenu Passif</span>
+                          <strong className="text-base font-black text-yellow-600 font-mono mt-0.5 block">
+                            {item.dailyPassiveAether} ₳/j
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="text-[11px] text-slate-500 italic bg-white/80 p-2 rounded-xl">
+                        {item.clan.factionMotto || '« Force et Rigueur sous la Barre »'}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* TABLEAU COMPARATIF COMPLET DES FACTIONS */}
+              <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm overflow-hidden">
+                <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-sm text-slate-900">Registre Impérial de Souveraineté Territoriale</h4>
+                    <p className="text-xs text-slate-500">Détail des bastions détenus et génération d'Aether par jour</p>
+                  </div>
+                  <span className="text-xs text-slate-400 font-mono">Formule : 250 ₳ / Bastion / Jour</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
+                      <tr>
+                        <th className="p-4">Rang</th>
+                        <th className="p-4">Faction / Clan</th>
+                        <th className="p-4">Suzerain</th>
+                        <th className="p-4 text-center">Bastions Contrôlés</th>
+                        <th className="p-4 text-center">Hexagones H3</th>
+                        <th className="p-4 text-right">Aether Passif / Jour</th>
+                        <th className="p-4 text-center">Statut de Conquête</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {clanDominanceStats.map((item, idx) => (
+                        <tr key={item.clan.id} className="hover:bg-slate-50/80 transition">
+                          <td className="p-4 font-mono font-bold text-slate-900">#{idx + 1}</td>
+                          <td className="p-4">
+                            <strong className="text-slate-900 block">{item.clan.name}</strong>
+                            <span className="text-[11px] text-slate-400">{item.clan.description}</span>
+                          </td>
+                          <td className="p-4 font-mono font-medium text-slate-700">@{item.clan.leaderPseudo}</td>
+                          <td className="p-4 text-center font-mono font-black text-emerald-700 text-sm">
+                            {item.bastionsCount}
+                          </td>
+                          <td className="p-4 text-center font-mono font-bold text-slate-700">
+                            {item.hexesCount}
+                          </td>
+                          <td className="p-4 text-right font-mono font-black text-yellow-600 text-sm">
+                            +{item.dailyPassiveAether} ₳
+                          </td>
+                          <td className="p-4 text-center">
+                            {item.bastionsCount >= 4 ? (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-bold">
+                                HÉGÉMONIE
+                              </span>
+                            ) : item.bastionsCount > 0 ? (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] bg-sky-100 text-sky-800 font-bold">
+                                IMPLANTE
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] bg-slate-100 text-slate-500 font-medium">
+                                SANS TERRE
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1630,6 +2729,473 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 1 : HOMOLOGUER UN NOUVEAU BASTION */}
+      {showAddBastionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+          <div className="w-full max-w-lg bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 space-y-4 text-xs max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-emerald-600" />
+                <h3 className="font-bold text-base text-slate-900">Homologuer un Nouveau Bastion</h3>
+              </div>
+              <button onClick={() => setShowAddBastionModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveNewBastion} className="space-y-3.5">
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Nom du Bastion :</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ex: Bastion des Arènes de Lutèce"
+                  value={newBastionName}
+                  onChange={(e) => setNewBastionName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900 focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">Métropole :</label>
+                  <select
+                    value={newBastionCity}
+                    onChange={(e) => setNewBastionCity(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900"
+                  >
+                    <option value="Paris">Paris</option>
+                    <option value="Lyon">Lyon</option>
+                    <option value="Marseille">Marseille</option>
+                    <option value="Bordeaux">Bordeaux</option>
+                    <option value="Lille">Lille</option>
+                    <option value="Toulouse">Toulouse</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">Quartier / Secteur :</label>
+                  <input
+                    type="text"
+                    placeholder="ex: Quartier Latin"
+                    value={newBastionNeighborhood}
+                    onChange={(e) => setNewBastionNeighborhood(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">Latitude GPS :</label>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={newBastionLat}
+                    onChange={(e) => setNewBastionLat(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">Longitude GPS :</label>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={newBastionLng}
+                    onChange={(e) => setNewBastionLng(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">Configuration du Spot :</label>
+                  <select
+                    value={newBastionType}
+                    onChange={(e) => setNewBastionType(e.target.value as any)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900"
+                  >
+                    <option value="PARC_COMPLET">Parc Complet</option>
+                    <option value="BARRES_TRACTION">Barres de Traction</option>
+                    <option value="STATION_FREESTYLE">Station Freestyle</option>
+                    <option value="MODULES_STREET">Modules Street</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">Statut Tactique :</label>
+                  <select
+                    value={newBastionStatus}
+                    onChange={(e) => setNewBastionStatus(e.target.value as any)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-bold"
+                  >
+                    <option value="FORTERESSE">FORTERESSE (Imprenable)</option>
+                    <option value="STABLE">STABLE</option>
+                    <option value="CONFLIT">CONFLIT (En Siège)</option>
+                    <option value="VIERGE">VIERGE (Inexploré)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Équipements répertoriés (virgules) :</label>
+                <input
+                  type="text"
+                  value={newBastionEquipmentInput}
+                  onChange={(e) => setNewBastionEquipmentInput(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5"
+                />
+              </div>
+
+              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2.5">
+                <span className="font-bold text-slate-800 block text-xs flex items-center gap-1.5">
+                  <Crown className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Défense Initiale (Boss du Spot)</span>
+                </span>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] text-slate-600 block mb-1">Faction Régnante :</label>
+                    <select
+                      value={newBastionClan}
+                      onChange={(e) => setNewBastionClan(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2 text-slate-900"
+                    >
+                      {clansList.map((c) => (
+                        <option key={c.id} value={c.name}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-slate-600 block mb-1">Pseudo du Boss :</label>
+                    <input
+                      type="text"
+                      value={newBastionBossPseudo}
+                      onChange={(e) => setNewBastionBossPseudo(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] text-slate-600 block mb-1">Exercice imposé :</label>
+                    <select
+                      value={newBastionBossExercise}
+                      onChange={(e) => setNewBastionBossExercise(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2"
+                    >
+                      <option value="Tractions strictes">Tractions strictes</option>
+                      <option value="Dips aux barres parallèles">Dips barres parallèles</option>
+                      <option value="Muscle-ups stricts">Muscle-ups stricts</option>
+                      <option value="Pompes diamant">Pompes diamant</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-slate-600 block mb-1">Record de Répétitions :</label>
+                    <input
+                      type="number"
+                      value={newBastionBossReps}
+                      onChange={(e) => setNewBastionBossReps(Number(e.target.value))}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2 font-mono font-bold"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAddBastionModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-semibold"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                >
+                  Homologuer le Bastion
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2 : TRANSFÉRER LA SOUVERAINETÉ D'UN BASTION */}
+      {transferringBastion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+          <div className="w-full max-w-md bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 space-y-4 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Share2 className="w-5 h-5 text-indigo-600" />
+                <h3 className="font-bold text-base text-slate-900">Transférer la Souveraineté</h3>
+              </div>
+              <button onClick={() => setTransferringBastion(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-1">
+              <span className="text-[10px] text-slate-400 font-semibold uppercase">Bastion Cible</span>
+              <h4 className="font-bold text-sm text-slate-900">{transferringBastion.name}</h4>
+              <p className="text-slate-600">
+                Ville : {transferringBastion.city} • Actuel Souverain : <strong>{transferringBastion.currentBoss?.clanName || 'Indépendant'}</strong>
+              </p>
+            </div>
+
+            <form onSubmit={handleTransferSovereignty} className="space-y-3.5">
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Nouvelle Faction Souveraine :</label>
+                <select
+                  value={transferTargetClanName}
+                  onChange={(e) => setTransferTargetClanName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-bold"
+                >
+                  {clansList.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.name} (Chef: @{c.leaderPseudo})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Statut Tactique après transfert :</label>
+                <select
+                  value={transferNewStatus}
+                  onChange={(e) => setTransferNewStatus(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900"
+                >
+                  <option value="FORTERESSE">FORTERESSE (Défense Maximale)</option>
+                  <option value="STABLE">STABLE</option>
+                  <option value="CONFLIT">CONFLIT (Siège en cours)</option>
+                </select>
+              </div>
+
+              <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl text-indigo-900 space-y-1">
+                <span className="font-bold block text-[11px] flex items-center gap-1">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Réinitialisation du Decay :</span>
+                </span>
+                <p className="text-[11px] text-indigo-800">
+                  Le transfert réinitialise immédiatement le déclin de 5%/semaine à <strong>0%</strong>, octroyant un mandat complet à la nouvelle faction.
+                </p>
+              </div>
+
+              <label className="flex items-center gap-2 cursor-pointer pt-1">
+                <input
+                  type="checkbox"
+                  checked={transferSendPush}
+                  onChange={(e) => setTransferSendPush(e.target.checked)}
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                />
+                <span className="font-medium text-slate-700">Diffuser une alerte push prioritaire aux athlètes</span>
+              </label>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setTransferringBastion(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-semibold"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+                >
+                  Confirmer le Transfert
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3 : DÉCLARATION D'UN ÉTAT DE SIÈGE */}
+      {siegingBastion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+          <div className="w-full max-w-md bg-white rounded-3xl border border-rose-200 shadow-2xl p-6 space-y-4 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Swords className="w-5 h-5 text-rose-600" />
+                <h3 className="font-bold text-base text-slate-900">Déclarer un Siège de Faction</h3>
+              </div>
+              <button onClick={() => setSiegingBastion(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-rose-50 border border-rose-200 p-3.5 rounded-2xl text-rose-900 space-y-1">
+              <span className="font-bold text-xs flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-rose-600" />
+                <span>Bastion sous Menace : {siegingBastion.name}</span>
+              </span>
+              <p className="text-[11px] text-rose-800">
+                Faction Défenseuse : <strong>{siegingBastion.currentBoss?.clanName || 'Faction Actuelle'}</strong> (Boss : @{siegingBastion.currentBoss?.pseudo})
+              </p>
+            </div>
+
+            <form onSubmit={handleTriggerSiege} className="space-y-3.5">
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Faction Assaillante :</label>
+                <select
+                  value={siegeAttackingClanName}
+                  onChange={(e) => setSiegeAttackingClanName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-bold"
+                >
+                  {clansList.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Message d'Alerte Push Personnalisé :</label>
+                <textarea
+                  rows={3}
+                  placeholder="Laissez vide pour le message automatique d'appel aux armes..."
+                  value={siegePushCustomText}
+                  onChange={(e) => setSiegePushCustomText(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900 focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setSiegingBastion(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-semibold"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold flex items-center gap-1.5"
+                >
+                  <Swords className="w-3.5 h-3.5" />
+                  <span>Lancer le Siège & Notifier</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4 : FICHE DÉTAILLÉE & LEADERBOARD DU BASTION */}
+      {detailBastion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+          <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 space-y-4 text-xs max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-emerald-600" />
+                <div>
+                  <h3 className="font-bold text-base text-slate-900">{detailBastion.name}</h3>
+                  <span className="text-slate-500 text-[11px]">{detailBastion.city} • {detailBastion.neighborhood}</span>
+                </div>
+              </div>
+              <button onClick={() => setDetailBastion(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Photo grand format */}
+            <div className="relative h-48 rounded-2xl overflow-hidden bg-slate-900">
+              <img
+                src={detailBastion.images?.[0] || 'https://images.unsplash.com/photo-1574680096145-d05b474e2155?w=700'}
+                alt={detailBastion.name}
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute top-3 right-3">
+                <span className="px-3 py-1 rounded-xl bg-slate-950/80 text-white font-mono font-bold backdrop-blur-md">
+                  {detailBastion.tacticalStatus}
+                </span>
+              </div>
+            </div>
+
+            {/* Équipements & Détails */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <span className="text-[10px] text-slate-400 font-bold block mb-1">Type d'infrastructure</span>
+                <strong className="text-slate-800 font-mono text-xs block">{detailBastion.type}</strong>
+              </div>
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <span className="text-[10px] text-slate-400 font-bold block mb-1">Coordonnées GPS</span>
+                <strong className="text-slate-800 font-mono text-xs block">
+                  {detailBastion.position.latitude.toFixed(4)}, {detailBastion.position.longitude.toFixed(4)}
+                </strong>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <span className="font-bold text-slate-700 block">Équipements répertoriés :</span>
+              <div className="flex flex-wrap gap-1.5">
+                {detailBastion.equipment.map((eq, i) => (
+                  <span key={i} className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 font-semibold border border-emerald-200">
+                    {eq}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Leaderboard des Défenseurs & Challengers */}
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-sm text-slate-900">Registre du Panthéon du Spot</h4>
+                <span className="text-slate-400 text-[11px]">{detailBastion.leaderboard?.length || 0} performances certifiées</span>
+              </div>
+
+              <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-100/70 text-slate-500 font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="p-3">Rang</th>
+                      <th className="p-3">Athlète</th>
+                      <th className="p-3">Faction</th>
+                      <th className="p-3 text-center">Exercice</th>
+                      <th className="p-3 text-right">Reps Brutes</th>
+                      <th className="p-3 text-right">Reps Effectives</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200/60">
+                    {(detailBastion.leaderboard || []).map((entry, idx) => (
+                      <tr key={idx} className={idx === 0 ? 'bg-amber-50/40 font-bold' : ''}>
+                        <td className="p-3 font-mono">
+                          {idx === 0 ? '👑 Boss' : `#${idx + 1}`}
+                        </td>
+                        <td className="p-3 font-mono text-slate-900">@{entry.pseudo}</td>
+                        <td className="p-3 text-slate-700">{entry.clanName || 'Indépendant'}</td>
+                        <td className="p-3 text-center font-mono text-slate-600">{entry.exerciseType}</td>
+                        <td className="p-3 text-right font-mono font-bold text-slate-900">{entry.reps}</td>
+                        <td className="p-3 text-right font-mono font-bold text-emerald-700">{entry.effectiveReps}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                onClick={() => setDetailBastion(null)}
+                className="px-5 py-2 rounded-xl bg-slate-900 text-white font-bold"
+              >
+                Fermer
+              </button>
+            </div>
           </div>
         </div>
       )}
