@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   TrendingUp,
   Activity,
@@ -15,10 +15,26 @@ import {
   Clock,
   UserCheck,
   Info,
-  Filter
+  Filter,
+  Shield,
+  Swords,
+  Crown,
+  Hexagon,
+  ChevronRight,
+  ShieldAlert,
+  Coins,
+  ShieldCheck,
+  Eye,
+  X,
+  ExternalLink
 } from 'lucide-react';
 import { CurrentArcBanner } from './CurrentArcBanner';
-import { AthleteUser, StreetWorkoutSpot } from '../types/admin';
+import { AthleteUser, StreetWorkoutSpot, Clan } from '../types/admin';
+import { BastionTacticalSpot, TerritoryHexModel } from '../types/arena';
+import { INITIAL_BASTIONS_SPOTS, INITIAL_HEX_TERRITORIES } from '../data/arenaData';
+import { INITIAL_PANTHEON_CLANS } from '../data/pantheonData';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 
 interface RetentionPoint {
   dayLabel: string;
@@ -47,6 +63,42 @@ export const AnalyticsCharts: React.FC<AnalyticsChartsProps> = ({ athletes = [],
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d' | 'year'>('7d');
   const [selectedCohort, setSelectedCohort] = useState<'all' | 'recent' | 'veterans'>('all');
   const [hoveredPoint, setHoveredPoint] = useState<RetentionPoint | null>(null);
+
+  // Datasets Réels Domination Territoriale H3
+  const [bastions, setBastions] = useState<BastionTacticalSpot[]>(INITIAL_BASTIONS_SPOTS);
+  const [territories, setTerritories] = useState<TerritoryHexModel[]>(INITIAL_HEX_TERRITORIES);
+  const [clansList] = useState<Clan[]>(INITIAL_PANTHEON_CLANS);
+  const [selectedClanForModal, setSelectedClanForModal] = useState<Clan | null>(null);
+
+  // Synchronisation temps réel Firestore
+  useEffect(() => {
+    const unsubBastions = onSnapshot(
+      collection(db, 'bastions'),
+      (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as BastionTacticalSpot));
+          setBastions(list);
+        }
+      },
+      (err) => console.warn('Firestore bastions snapshot in Analytics:', err)
+    );
+
+    const unsubTerritories = onSnapshot(
+      collection(db, 'territories'),
+      (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as TerritoryHexModel));
+          setTerritories(list);
+        }
+      },
+      (err) => console.warn('Firestore territories snapshot in Analytics:', err)
+    );
+
+    return () => {
+      unsubBastions();
+      unsubTerritories();
+    };
+  }, []);
 
   const totalAthletesCount = athletes.length;
 
@@ -114,21 +166,55 @@ export const AnalyticsCharts: React.FC<AnalyticsChartsProps> = ({ athletes = [],
     };
   }, [athletes]);
 
-  // Répartition par Clan réelle sur les bastions
+  // Répartition par Clan réelle sur les bastions et la grille H3
   const clanDistribution = useMemo(() => {
-    const total = spots.length > 0 ? spots.length : 35;
-    const legionCount = Math.round(total * 0.4);
-    const valkyriesCount = Math.round(total * 0.31);
-    const ombresCount = Math.round(total * 0.17);
-    const philosophesCount = Math.max(1, total - (legionCount + valkyriesCount + ombresCount));
+    const totalBastions = Math.max(bastions.length, 1);
+    const colors = [
+      { bg: 'bg-indigo-600', text: 'text-indigo-600', ring: 'ring-indigo-500/20', light: 'bg-indigo-50' },
+      { bg: 'bg-amber-500', text: 'text-amber-600', ring: 'ring-amber-500/20', light: 'bg-amber-50' },
+      { bg: 'bg-emerald-600', text: 'text-emerald-600', ring: 'ring-emerald-500/20', light: 'bg-emerald-50' },
+      { bg: 'bg-sky-600', text: 'text-sky-600', ring: 'ring-sky-500/20', light: 'bg-sky-50' },
+    ];
+
+    const stats = clansList.map((clan, idx) => {
+      const clanBastions = bastions.filter(
+        (b) =>
+          b.currentBoss?.clanName?.toLowerCase().includes(clan.name.toLowerCase()) ||
+          clan.name.toLowerCase().includes(b.currentBoss?.clanName?.toLowerCase() || '___')
+      );
+      const clanHexes = territories.filter(
+        (t) =>
+          t.ownerClanName?.toLowerCase().includes(clan.name.toLowerCase()) ||
+          clan.name.toLowerCase().includes(t.ownerClanName?.toLowerCase() || '___')
+      );
+      const count = clanBastions.length;
+      const pct = Math.round((count / totalBastions) * 100);
+      const dailyPassiveAether = count * 250;
+      const hasConflict = clanBastions.some((b) => b.tacticalStatus === 'CONFLIT');
+
+      return {
+        clan,
+        count,
+        pct,
+        hexesCount: clanHexes.length,
+        dailyPassiveAether,
+        hasConflict,
+        color: colors[idx % colors.length],
+        bastions: clanBastions,
+      };
+    }).sort((a, b) => b.count - a.count);
+
+    const conflitsCount = bastions.filter((b) => b.tacticalStatus === 'CONFLIT').length;
+    const emperorClan = stats[0]?.clan?.name || 'Ronin Calisthenics Paris';
+
     return {
-      total,
-      legion: { count: legionCount, pct: Math.round((legionCount / total) * 100) },
-      valkyries: { count: valkyriesCount, pct: Math.round((valkyriesCount / total) * 100) },
-      ombres: { count: ombresCount, pct: Math.round((ombresCount / total) * 100) },
-      philosophes: { count: philosophesCount, pct: Math.round((philosophesCount / total) * 100) },
+      total: bastions.length,
+      totalTerritories: territories.length,
+      stats,
+      conflitsCount,
+      emperorClan,
     };
-  }, [spots.length]);
+  }, [bastions, territories, clansList]);
 
   const weekDays = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
   const dayDistribution = [0.12, 0.15, 0.14, 0.16, 0.13, 0.18, 0.12];
@@ -356,16 +442,29 @@ export const AnalyticsCharts: React.FC<AnalyticsChartsProps> = ({ athletes = [],
         {/* KPI 4 */}
         <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm hover:shadow transition-shadow">
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1">
-            <span>Secteurs H3 sous contrôle</span>
-            <div className="w-7 h-7 rounded-lg bg-purple-50 flex items-center justify-center text-purple-600">
-              <MapPin className="w-4 h-4" />
+            <span>Secteurs H3 & Bastions sous contrôle</span>
+            <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
+              <Hexagon className="w-4 h-4" />
             </div>
           </div>
-          <div className="text-3xl font-semibold tracking-tight text-slate-900 mt-2">
-            {contestedHexagons}
+          <div className="text-3xl font-semibold tracking-tight text-slate-900 mt-2 font-mono">
+            {clanDistribution.total} <span className="text-sm font-sans font-normal text-slate-400">spots actifs</span>
           </div>
-          <div className="flex items-center gap-1 text-xs text-slate-500 font-medium mt-2">
-            <span>4 clans en compétition active</span>
+          <div className="flex items-center justify-between text-xs mt-2 pt-1 border-t border-slate-100">
+            <span className="text-slate-500 font-medium">
+              {clanDistribution.totalTerritories} Hexagones H3
+            </span>
+            {clanDistribution.conflitsCount > 0 ? (
+              <span className="text-rose-600 font-bold flex items-center gap-1 animate-pulse">
+                <Swords className="w-3.5 h-3.5" />
+                <span>{clanDistribution.conflitsCount} Siège{clanDistribution.conflitsCount > 1 ? 's' : ''}</span>
+              </span>
+            ) : (
+              <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                <span>Souveraineté Stable</span>
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -730,52 +829,76 @@ export const AnalyticsCharts: React.FC<AnalyticsChartsProps> = ({ athletes = [],
         {/* Clan Dominance */}
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-6 space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-slate-900">
-              Contrôle des Bastions par Clan
-            </h3>
-            <span className="text-xs text-slate-400 font-medium">{clanDistribution.total} spots recensés</span>
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <Hexagon className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Contrôle des Bastions & Domination Factions
+                </h3>
+                <span className="text-[11px] text-slate-400 font-medium block">
+                  Grille Spatiale Uber H3 • 250 ₳ / Bastion / Jour
+                </span>
+              </div>
+            </div>
+            <a
+              href="#domination"
+              className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition border border-emerald-200/80"
+              title="Ouvrir la console complète de Domination du Panthéon"
+            >
+              <span>Console Panthéon</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </a>
           </div>
 
-          <div className="space-y-3 text-xs">
-            <div>
-              <div className="flex justify-between text-slate-700 font-medium mb-1.5">
-                <span>Légion Noire</span>
-                <span className="text-slate-900 font-semibold">{clanDistribution.legion.count} bastions ({clanDistribution.legion.pct}%)</span>
-              </div>
-              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-blue-600 rounded-full transition-all duration-500" style={{ width: `${clanDistribution.legion.pct}%` }}></div>
-              </div>
-            </div>
+          <div className="space-y-3.5 text-xs pt-1">
+            {clanDistribution.stats.map((item) => (
+              <div
+                key={item.clan.id}
+                onClick={() => setSelectedClanForModal(item.clan)}
+                className="group cursor-pointer hover:bg-slate-50 p-2.5 -mx-2.5 rounded-xl transition border border-transparent hover:border-slate-200/60"
+              >
+                <div className="flex items-center justify-between font-medium mb-1.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${item.color.bg}`} />
+                    <span className="text-slate-900 font-semibold group-hover:text-emerald-700 transition-colors truncate">
+                      {item.clan.name}
+                    </span>
+                    {item.hasConflict && (
+                      <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-rose-100 text-rose-700 font-black animate-pulse shrink-0">
+                        SIÈGE
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 font-mono shrink-0">
+                    <span className="text-slate-500 font-normal text-[11px]">
+                      +{item.dailyPassiveAether} ₳/j
+                    </span>
+                    <span className="text-slate-900 font-bold">
+                      {item.count} spots ({item.pct}%)
+                    </span>
+                  </div>
+                </div>
 
-            <div>
-              <div className="flex justify-between text-slate-700 font-medium mb-1.5">
-                <span>Valkyries Primordiales</span>
-                <span className="text-slate-900 font-semibold">{clanDistribution.valkyries.count} bastions ({clanDistribution.valkyries.pct}%)</span>
+                <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200/50">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${item.color.bg}`}
+                    style={{ width: `${Math.max(item.pct, item.count > 0 ? 6 : 0)}%` }}
+                  />
+                </div>
               </div>
-              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${clanDistribution.valkyries.pct}%` }}></div>
-              </div>
-            </div>
+            ))}
+          </div>
 
-            <div>
-              <div className="flex justify-between text-slate-700 font-medium mb-1.5">
-                <span>Ombres du Dojo</span>
-                <span className="text-slate-900 font-semibold">{clanDistribution.ombres.count} bastions ({clanDistribution.ombres.pct}%)</span>
-              </div>
-              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${clanDistribution.ombres.pct}%` }}></div>
-              </div>
-            </div>
-
-            <div>
-              <div className="flex justify-between text-slate-700 font-medium mb-1.5">
-                <span>Philosophes Guerriers</span>
-                <span className="text-slate-900 font-semibold">{clanDistribution.philosophes.count} bastions ({clanDistribution.philosophes.pct}%)</span>
-              </div>
-              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-purple-500 rounded-full transition-all duration-500" style={{ width: `${clanDistribution.philosophes.pct}%` }}></div>
-              </div>
-            </div>
+          <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs text-slate-500">
+            <span className="flex items-center gap-1.5">
+              <Crown className="w-3.5 h-3.5 text-amber-500" />
+              <span>Faction Suprême : <strong className="text-slate-800">{clanDistribution.emperorClan}</strong></span>
+            </span>
+            <span className="text-slate-400 font-mono text-[11px]">
+              {clanDistribution.total} bastions • {clanDistribution.totalTerritories} hexagones
+            </span>
           </div>
         </div>
 
@@ -813,6 +936,116 @@ export const AnalyticsCharts: React.FC<AnalyticsChartsProps> = ({ athletes = [],
           </div>
         </div>
       </div>
+
+      {/* MODAL : DÉTAIL DES BASTIONS DU CLAN (DOMINATION DIRECTE) */}
+      {selectedClanForModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+          <div className="w-full max-w-lg bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 space-y-4 text-xs max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Crown className="w-5 h-5 text-amber-500" />
+                <div>
+                  <h3 className="font-bold text-base text-slate-900">{selectedClanForModal.name}</h3>
+                  <span className="text-slate-500 text-[11px]">
+                    Suzerain : @{selectedClanForModal.leaderPseudo} • {selectedClanForModal.membersCount} athlètes
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedClanForModal(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 italic text-slate-600">
+              {selectedClanForModal.factionMotto || '« Force et Rigueur sous la Barre »'}
+            </div>
+
+            {/* Liste des Bastions sous mandat de ce Clan */}
+            <div className="space-y-2">
+              <h4 className="font-bold text-xs text-slate-800 uppercase tracking-wider">
+                Bastions Tenus par cette Faction :
+              </h4>
+
+              {(() => {
+                const clanBastions = bastions.filter(
+                  (b) =>
+                    b.currentBoss?.clanName?.toLowerCase().includes(selectedClanForModal.name.toLowerCase()) ||
+                    selectedClanForModal.name.toLowerCase().includes(b.currentBoss?.clanName?.toLowerCase() || '___')
+                );
+
+                if (clanBastions.length === 0) {
+                  return (
+                    <div className="p-4 rounded-xl bg-slate-100 text-slate-500 text-center">
+                      Aucun bastion actuellement sous contrôle de ce clan.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-2">
+                    {clanBastions.map((b) => (
+                      <div
+                        key={b.id}
+                        className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between gap-3"
+                      >
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-slate-900 truncate">{b.name}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">({b.city})</span>
+                          </div>
+                          <span className="text-[11px] text-slate-500 block truncate">
+                            Boss : <strong>@{b.currentBoss?.pseudo}</strong> • {b.currentBoss?.reps} reps ({b.currentBoss?.exerciseType || 'PULL_UPS'})
+                          </span>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          {b.tacticalStatus === 'CONFLIT' ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-rose-100 text-rose-700 font-bold animate-pulse">
+                              EN SIÈGE
+                            </span>
+                          ) : b.tacticalStatus === 'FORTERESSE' ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-bold">
+                              FORTERESSE
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-sky-100 text-sky-800 font-bold">
+                              STABLE
+                            </span>
+                          )}
+                          <span className="text-[10px] text-yellow-600 font-mono block mt-0.5 font-bold">
+                            +250 ₳/j
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+              <a
+                href="#domination"
+                onClick={() => setSelectedClanForModal(null)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition"
+              >
+                <Hexagon className="w-4 h-4" />
+                <span>Arbitrer dans la Console Panthéon</span>
+              </a>
+
+              <button
+                onClick={() => setSelectedClanForModal(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
