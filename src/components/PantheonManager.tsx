@@ -350,7 +350,27 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
       collection(db, 'bastions'),
       (snap) => {
         if (!snap.empty) {
-          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as BastionTacticalSpot));
+          const list = snap.docs.map((d) => {
+            const raw = d.data() as any;
+            return {
+              id: d.id || raw.id || `bastion_${Date.now()}`,
+              name: raw.name || 'Bastion sans nom',
+              city: raw.city || 'Paris',
+              neighborhood: raw.neighborhood || 'Zone Urbaine',
+              position: raw.position || { latitude: 48.8566, longitude: 2.3522 },
+              type: raw.type || 'STREET_WORKOUT',
+              equipment: Array.isArray(raw.equipment) ? raw.equipment : ['Barres de traction'],
+              tacticalStatus: raw.tacticalStatus || 'VIERGE',
+              failedAttemptsCount: typeof raw.failedAttemptsCount === 'number' ? raw.failedAttemptsCount : 0,
+              sourcePriority: raw.sourcePriority || 'FIRESTORE_ECLAIREUR',
+              images: Array.isArray(raw.images) && raw.images.length > 0 ? raw.images : ['https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=500'],
+              currentBoss: raw.currentBoss,
+              lastBeatenAt: raw.lastBeatenAt,
+              bossAchievedAt: raw.bossAchievedAt,
+              leaderboard: Array.isArray(raw.leaderboard) ? raw.leaderboard : [],
+              osmNote: raw.osmNote,
+            } as BastionTacticalSpot;
+          });
           setBastions(list);
         }
       },
@@ -390,15 +410,16 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
 
   // Statistiques de Domination
   const clanDominanceStats = clansList.map((clan) => {
+    const clanName = (clan.name || '').toLowerCase();
     const clanBastions = bastions.filter(
       (b) =>
-        b.currentBoss?.clanName?.toLowerCase().includes(clan.name.toLowerCase()) ||
-        clan.name.toLowerCase().includes(b.currentBoss?.clanName?.toLowerCase() || '___')
+        b.currentBoss?.clanName?.toLowerCase().includes(clanName) ||
+        (clanName && clanName.includes(b.currentBoss?.clanName?.toLowerCase() || '___'))
     );
     const clanHexes = territories.filter(
       (t) =>
-        t.ownerClanName?.toLowerCase().includes(clan.name.toLowerCase()) ||
-        clan.name.toLowerCase().includes(t.ownerClanName?.toLowerCase() || '___')
+        t.ownerClanName?.toLowerCase().includes(clanName) ||
+        (clanName && clanName.includes(t.ownerClanName?.toLowerCase() || '___'))
     );
     const dailyPassiveAether = clanBastions.length * 250;
     return {
@@ -1652,14 +1673,14 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {bastions
                   .filter((b) => {
-                    const matchCity = dominationCityFilter === 'ALL' || b.city.toLowerCase() === dominationCityFilter.toLowerCase();
+                    const matchCity = dominationCityFilter === 'ALL' || (b.city || '').toLowerCase() === dominationCityFilter.toLowerCase();
                     const matchStatus = dominationStatusFilter === 'ALL' || b.tacticalStatus === dominationStatusFilter;
                     const q = dominationSearch.toLowerCase();
                     const matchQuery =
                       !q ||
-                      b.name.toLowerCase().includes(q) ||
-                      b.city.toLowerCase().includes(q) ||
-                      b.neighborhood.toLowerCase().includes(q) ||
+                      (b.name || '').toLowerCase().includes(q) ||
+                      (b.city || '').toLowerCase().includes(q) ||
+                      (b.neighborhood || '').toLowerCase().includes(q) ||
                       (b.currentBoss?.pseudo || '').toLowerCase().includes(q) ||
                       (b.currentBoss?.clanName || '').toLowerCase().includes(q);
                     return matchCity && matchStatus && matchQuery;
@@ -1698,10 +1719,10 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
                             <div className="absolute top-3 left-3 flex items-center gap-1.5">
                               <span className="px-2.5 py-1 rounded-xl bg-slate-950/80 backdrop-blur-md text-white font-mono text-[11px] font-bold border border-slate-700/60 flex items-center gap-1">
                                 <MapPin className="w-3 h-3 text-emerald-400" />
-                                <span>{bastion.city}</span>
+                                <span>{bastion.city || 'Paris'}</span>
                               </span>
                               <span className="px-2 py-0.5 rounded-lg bg-black/60 text-slate-300 text-[10px] font-medium backdrop-blur-xs">
-                                {bastion.neighborhood}
+                                {bastion.neighborhood || 'Zone Urbaine'}
                               </span>
                             </div>
 
@@ -1737,7 +1758,7 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
                                 {bastion.name}
                               </h4>
                               <span className="text-[11px] text-slate-300 font-medium">
-                                Type : {bastion.type.replace('_', ' ')}
+                                Type : {(bastion.type || 'STREET_WORKOUT').replace('_', ' ')}
                               </span>
                             </div>
                           </div>
@@ -1746,7 +1767,7 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
                           <div className="p-4 space-y-3.5">
                             {/* TAGS D'ÉQUIPEMENTS */}
                             <div className="flex flex-wrap gap-1">
-                              {bastion.equipment.slice(0, 3).map((eq, idx) => (
+                              {(bastion.equipment || []).slice(0, 3).map((eq, idx) => (
                                 <span
                                   key={idx}
                                   className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-lg font-medium border border-slate-200/60"
@@ -1754,9 +1775,9 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
                                   {eq}
                                 </span>
                               ))}
-                              {bastion.equipment.length > 3 && (
+                              {(bastion.equipment?.length || 0) > 3 && (
                                 <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-lg font-medium">
-                                  +{bastion.equipment.length - 3}
+                                  +{(bastion.equipment?.length || 0) - 3}
                                 </span>
                               )}
                             </div>
@@ -3139,12 +3160,12 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                 <span className="text-[10px] text-slate-400 font-bold block mb-1">Type d'infrastructure</span>
-                <strong className="text-slate-800 font-mono text-xs block">{detailBastion.type}</strong>
+                <strong className="text-slate-800 font-mono text-xs block">{(detailBastion.type || 'STREET_WORKOUT').replace('_', ' ')}</strong>
               </div>
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                 <span className="text-[10px] text-slate-400 font-bold block mb-1">Coordonnées GPS</span>
                 <strong className="text-slate-800 font-mono text-xs block">
-                  {detailBastion.position.latitude.toFixed(4)}, {detailBastion.position.longitude.toFixed(4)}
+                  {detailBastion.position?.latitude != null ? detailBastion.position.latitude.toFixed(4) : '48.8566'}, {detailBastion.position?.longitude != null ? detailBastion.position.longitude.toFixed(4) : '2.3522'}
                 </strong>
               </div>
             </div>
@@ -3152,7 +3173,7 @@ export const PantheonManager: React.FC<PantheonManagerProps> = ({
             <div className="space-y-1">
               <span className="font-bold text-slate-700 block">Équipements répertoriés :</span>
               <div className="flex flex-wrap gap-1.5">
-                {detailBastion.equipment.map((eq, i) => (
+                {(detailBastion.equipment || []).map((eq, i) => (
                   <span key={i} className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 font-semibold border border-emerald-200">
                     {eq}
                   </span>

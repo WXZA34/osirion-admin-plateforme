@@ -34,7 +34,8 @@ import {
   Database,
   Lock,
   Award,
-  Megaphone
+  Megaphone,
+  Flame
 } from 'lucide-react';
 
 // Real Authenticated Data & Types
@@ -85,10 +86,12 @@ import { FirestoreConnectionHubModal } from './components/FirestoreConnectionHub
 import { db, auth } from './lib/firebase';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User } from 'firebase/auth';
+import { WorldRaidBossManager } from './components/WorldRaidBossManager';
 
 export type AdminTab =
   | 'analytics'
   | 'pantheon'
+  | 'world_raid'
   | 'arena'
   | 'library'
   | 'daily_transmission'
@@ -156,6 +159,14 @@ export const NAV_MODULES: NavModuleDefinition[] = [
     icon: Award,
     description: 'Gestion des reliques, titres, halos et cosmétiques achetables',
     badge: 'Live',
+  },
+  {
+    id: 'world_raid',
+    label: 'Raid Mondial (World Boss)',
+    category: 'Contenu & Entraînement',
+    icon: Flame,
+    description: 'Gestion des Titans mondiaux, cinématiques obligatoires/skip, PV mondiaux et récompenses',
+    badge: 'Boss & Cinématiques',
   },
   {
     id: 'arena',
@@ -1399,6 +1410,11 @@ export default function App() {
             userRole={userRole}
             onUpdateAthlete={handleUpdateAthlete}
           />
+        )}
+
+        {/* 1.B BIS - RAID MONDIAL & GESTION DES TITANS / CINÉMATIQUES */}
+        {activeTab === 'world_raid' && (
+          <WorldRaidBossManager />
         )}
 
         {/* 1.C L'ARÈNE COMPLÈTE (FORGE • TERRITOIRES • BASTIONS • COLISÉE) */}

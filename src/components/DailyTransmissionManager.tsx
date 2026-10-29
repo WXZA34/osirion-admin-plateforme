@@ -15,6 +15,7 @@ import {
   uploadBytes,
   getDownloadURL,
 } from 'firebase/storage';
+import { uploadFileDirect } from '../lib/storageUploader';
 import { AthleteUser } from '../types/admin';
 import {
   DailyTransmissionVideo,
@@ -395,65 +396,46 @@ export const DailyTransmissionManager: React.FC<DailyTransmissionManagerProps> =
     setUploadedFileName(`${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} Mo)`);
 
     try {
-      showToast(`Téléversement de « ${file.name} » vers Firebase Storage en cours...`);
+      showToast(`Téléversement haute vitesse de « ${file.name} »...`);
       const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const fileRef = storageRef(storage, `daily_transmissions/${Date.now()}_${cleanFileName}`);
-      const metadata = { contentType: file.type || 'video/mp4' };
-      const uploadTask = uploadBytesResumable(fileRef, file, metadata);
+      const storagePath = `daily_transmissions/${Date.now()}_${cleanFileName}`;
 
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          if (snapshot.totalBytes > 0) {
-            const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-            setUploadProgress(progress);
-          }
-        },
-        async (error) => {
-          console.warn('Resumable upload error, attempting direct uploadBytes fallback:', error);
-          try {
-            showToast('Transfert en mode direct...');
-            await uploadBytes(fileRef, file, metadata);
-            const downloadUrl = await getDownloadURL(fileRef);
-            setEditUrl(downloadUrl);
-            setUploadProgress(100);
-            setIsUploadingFile(false);
-            if (!editTitle || editTitle === 'force') {
-              setEditTitle(file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '));
-            }
-            showToast(`🎉 Vidéo « ${file.name} » téléversée avec succès sur Firebase Storage !`);
-          } catch (fallbackErr: any) {
-            console.error('Direct uploadBytes also failed:', fallbackErr);
-            showToast(`❌ Erreur téléversement : ${fallbackErr?.message || error.message}`);
-            setIsUploadingFile(false);
-            setUploadProgress(null);
-          }
-        },
-        async () => {
-          try {
-            const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-            setEditUrl(downloadUrl);
-            setUploadProgress(100);
-            setIsUploadingFile(false);
+      const downloadUrl = await uploadFileDirect(storagePath, file, (info) => {
+        setUploadProgress(info.progress);
+      });
 
-            if (!editTitle || editTitle === 'force') {
-              setEditTitle(file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '));
-            }
-
-            showToast(`🎉 Vidéo « ${file.name} » téléversée avec succès sur Firebase Storage ! Cliquez sur Enregistrer.`);
-          } catch (err: any) {
-            console.error('Error getting download URL:', err);
-            showToast(`❌ Erreur URL : ${err?.message || 'Impossible d\'obtenir l\'URL'}`);
-            setIsUploadingFile(false);
-            setUploadProgress(null);
-          }
-        }
-      );
-    } catch (err: any) {
-      console.error('Upload initiation error:', err);
-      showToast(`❌ Erreur : ${err?.message || 'Erreur lors du téléversement'}`);
+      setEditUrl(downloadUrl);
+      setUploadProgress(100);
       setIsUploadingFile(false);
-      setUploadProgress(null);
+
+      if (!editTitle || editTitle === 'force') {
+        setEditTitle(file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '));
+      }
+
+      showToast(`🎉 Vidéo « ${file.name} » téléversée avec succès sur Firebase Storage !`);
+    } catch (directErr: any) {
+      console.warn('Échec direct, bascule en mode standard:', directErr);
+      try {
+        const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const fileRef = storageRef(storage, `daily_transmissions/${Date.now()}_${cleanFileName}`);
+        const metadata = { contentType: file.type || 'video/mp4' };
+        await uploadBytes(fileRef, file, metadata);
+        const downloadUrl = await getDownloadURL(fileRef);
+        setEditUrl(downloadUrl);
+        setUploadProgress(100);
+        setIsUploadingFile(false);
+        if (!editTitle || editTitle === 'force') {
+          setEditTitle(file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '));
+        }
+        showToast(`🎉 Vidéo « ${file.name} » téléversée avec succès !`);
+      } catch (fallbackErr: any) {
+        console.error('Direct uploadBytes also failed:', fallbackErr);
+        const code = fallbackErr?.code || directErr?.code || '';
+        const msg = fallbackErr?.message || directErr?.message || 'Erreur inconnue';
+        showToast(`❌ Erreur téléversement (${code || 'réseau'}) : ${msg}`);
+        setIsUploadingFile(false);
+        setUploadProgress(null);
+      }
     }
   };
 
